@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Irium - AI Financial Research Assistant</title>
+    <link rel="stylesheet" href="./style.css?v=3.0">
+    <style>
+        .sidebar {
+            height: 100vh !important;
+            display: flex !important;
+            flex-direction: column !important;
+            justify-content: space-between !important;
+        }
+        .sidebar-footer {
+            padding: 12px 14px !important;
+            border-top: 1px solid #3a3a3a !important;
+            background: #1a1a1a !important;
+            flex-shrink: 0 !important;
+            display: flex !important;
+            align-items: center !important;
+        }
+        .auth-logged-out {
+            width: 100% !important;
+            display: flex !important;
+            align-items: center !important;
+        }
+        .auth-btn-green {
+            width: fit-content !important;
+            max-width: 100% !important;
+            height: 38px !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            gap: 8px !important;
+            padding: 0 16px !important;
+            background-color: #10a37f !important;
+            border: 1px solid rgba(255, 255, 255, 0.15) !important;
+            border-radius: 8px !important;
+            color: #ffffff !important;
+            font-size: 13.5px !important;
+            font-weight: 700 !important;
+            cursor: pointer !important;
+            white-space: nowrap !important;
+            box-shadow: 0 2px 8px rgba(16, 163, 127, 0.35) !important;
+            transition: background-color 0.18s ease, transform 0.15s ease !important;
+        }
+        .auth-btn-green:hover {
+            background-color: #0d8f6f !important;
+            transform: translateY(-1px) !important;
+        }
+        .auth-btn-label {
+            font-weight: 700 !important;
+            color: #ffffff !important;
+        }
+        .auth-btn-svg {
+            width: 16px !important;
+            height: 16px !important;
+            flex-shrink: 0 !important;
+            stroke: #ffffff !important;
+            color: #ffffff !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <a href="./landing.html" class="logo" style="text-decoration: none; color: inherit; display: flex; align-items: center; gap: 0.5rem;" title="Back to Landing Page">
+                    <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    Irium
+                </a>
+                <button class="new-chat-btn" id="newChatBtn">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M12 5v14M5 12h14" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                    New Chat
+                </button>
+            </div>
+
+            <div class="chat-history">
+                <div class="history-section">
+                    <h3>Today</h3>
+                    <div id="todayChats" class="history-items"></div>
+                </div>
+                <div class="history-section">
+                    <h3>Yesterday</h3>
+                    <div id="yesterdayChats" class="history-items"></div>
+                </div>
+                <div class="history-section">
+                    <h3>Previous 7 Days</h3>
+                    <div id="weekChats" class="history-items"></div>
+                </div>
+            </div>
+
+            <!-- Bottom-Left Auth Section -->
+            <div class="sidebar-footer" id="sidebarFooter" style="padding: 12px 14px; border-top: 1px solid #3a3a3a; background: #1a1a1a; flex-shrink: 0; display: flex; align-items: center;">
+                <!-- Logged Out View -->
+                <div class="auth-logged-out" id="authLoggedOut" style="width: 100%; display: flex; align-items: center;">
+                    <button class="auth-btn-green" id="loginSignupBtn" type="button" aria-haspopup="dialog" style="width: fit-content; max-width: 100%; height: 38px; display: inline-flex; align-items: center; gap: 8px; padding: 0 16px; background-color: #10a37f; border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; color: #ffffff; font-size: 13.5px; font-weight: 700; cursor: pointer; white-space: nowrap; text-align: center; box-shadow: 0 2px 8px rgba(16, 163, 127, 0.35);">
+                        <svg class="auth-btn-svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" style="width: 16px; height: 16px; flex-shrink: 0; stroke: #ffffff;">
+                            <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        <span class="auth-btn-label" style="font-weight: 700; color: #ffffff;">Log in / Sign up</span>
+                    </button>
+                </div>
+
+                <!-- Logged In View -->
+                <div class="auth-logged-in" id="authLoggedIn" style="display: none;">
+                    <div class="user-profile-card">
+                        <div class="user-avatar" id="userAvatar">U</div>
+                        <div class="user-details">
+                            <div class="user-name-row">
+                                <span class="user-display-name" id="userDisplayName">User</span>
+                                <span class="status-dot-active" title="Authenticated via JWT"></span>
+                            </div>
+                            <span class="user-display-email" id="userDisplayEmail">user@example.com</span>
+                        </div>
+                        <button class="logout-btn" id="logoutBtn" type="button" title="Sign out">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Chat Area -->
+        <main class="main-content">
+            <div class="chat-container">
+                <!-- Welcome Screen -->
+                <div class="welcome-screen" id="welcomeScreen">
+                    <div class="welcome-content">
+                        <h1 class="welcome-title">Welcome to Irium</h1>
+                        <p class="welcome-subtitle">AI-Powered Financial Research Assistant</p>
+                        
+                        <div class="capabilities">
+                            <div class="capability-card">
+                                <div class="capability-icon">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                        <circle cx="11" cy="11" r="8" stroke-width="2"/>
+                                        <path d="m21 21-4.35-4.35" stroke-width="2" stroke-linecap="round"/>
+                                    </svg>
+                                </div>
+                                <h3>Real-time Research</h3>
+                                <p>Get up-to-date financial information with source attribution</p>
+                            </div>
+                            
+                            <div class="capability-card">
+                                <div class="capability-icon">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke-width="2"/>
+                                        <polyline points="14 2 14 8 20 8" stroke-width="2"/>
+                                    </svg>
+                                </div>
+                                <h3>Document Analysis</h3>
+                                <p>Upload and analyze financial documents, PDFs, and reports</p>
+                            </div>
+                            
+                            <div class="capability-card">
+                                <div class="capability-icon">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </div>
+                                <h3>Multi-Agent Intelligence</h3>
+                                <p>Powered by specialized agents for simple, verified, and complex queries</p>
+                            </div>
+                        </div>
+
+                        <div class="example-prompts">
+                            <h3>Try asking:</h3>
+                            <div class="prompt-cards">
+                                <button class="prompt-card" data-prompt="What is EBITDA and how is it calculated?">
+                                    <span>"What is EBITDA and how is it calculated?"</span>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                        <polyline points="9 18 15 12 9 6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </button>
+                                <button class="prompt-card" data-prompt="What is the current RBI repo rate?">
+                                    <span>"What is the current RBI repo rate?"</span>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                        <polyline points="9 18 15 12 9 6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </button>
+                                <button class="prompt-card" data-prompt="Compare HDFC and ICICI Bank's financial performance">
+                                    <span>"Compare HDFC and ICICI Bank's financial performance"</span>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                        <polyline points="9 18 15 12 9 6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chat Messages -->
+                <div class="messages-container" id="messagesContainer"></div>
+            </div>
+
+            <!-- Input Area -->
+            <div class="input-container">
+                <div class="input-wrapper" id="inputWrapper">
+                    <button class="attach-btn" id="attachBtn" title="Attach document">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                    <input type="file" id="fileInput" accept=".pdf,.docx,.txt" style="display: none;" multiple>
+                    
+                    <textarea 
+                        id="messageInput" 
+                        placeholder="Ask me anything about finance..."
+                        rows="1"
+                    ></textarea>
+                    
+                    <button class="send-btn" id="sendBtn" disabled>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <line x1="22" y1="2" x2="11" y2="13" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                    
+                    <button class="stop-btn" id="stopBtn" style="display: none;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <rect x="6" y="6" width="12" height="12" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="input-footer">
+                    <span class="file-count" id="fileCount" style="display: none;"></span>
+                    <span class="input-hint">Irium can make mistakes. Check important info.</span>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Authentication Modal -->
+    <div class="auth-modal" id="authModal" hidden>
+        <div class="auth-backdrop" id="authBackdrop" data-close-auth></div>
+        <div class="auth-dialog-wrapper">
+            <section class="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+                <button class="auth-close" id="closeAuthBtn" type="button" aria-label="Close">&times;</button>
+                
+                <div class="auth-header">
+                    <h2 class="auth-brand-title" id="authTitle">IRIUM</h2>
+                    <p class="auth-subtitle" id="authSubtitle">Sign in to your account</p>
+                </div>
+
+                <div class="auth-tabs" role="tablist">
+                    <button class="auth-tab active" id="signinTab" type="button" role="tab">Sign in</button>
+                    <button class="auth-tab" id="signupTab" type="button" role="tab">Sign up</button>
+                </div>
+
+                <form id="authForm" novalidate>
+                    <div id="signupFields" style="display: none;">
+                        <div class="auth-form-group">
+                            <label for="authUsername">Username</label>
+                            <input id="authUsername" name="username" type="text" placeholder="e.g. fin_analyst" autocomplete="username">
+                        </div>
+                        <div class="auth-form-group">
+                            <label for="authFullName">Full name <span class="label-hint">(optional)</span></label>
+                            <input id="authFullName" name="full_name" type="text" placeholder="e.g. Alex Morgan" autocomplete="name">
+                        </div>
+                    </div>
+
+                    <div class="auth-form-group">
+                        <label for="authEmail">Email Address</label>
+                        <input id="authEmail" name="email" type="email" placeholder="name@domain.com" autocomplete="email" required>
+                    </div>
+
+                    <div class="auth-form-group">
+                        <label for="authPassword">Password</label>
+                        <input id="authPassword" name="password" type="password" placeholder="Enter your password" autocomplete="current-password" required minlength="6">
+                    </div>
+
+                    <div class="auth-error" id="authError" role="alert" style="display: none;"></div>
+                    <div class="auth-success" id="authSuccess" role="alert" style="display: none;"></div>
+
+                    <button class="auth-submit" id="authSubmit" type="submit">
+                        <span class="auth-submit-text" id="authSubmitText">Sign in</span>
+                    </button>
+                </form>
+
+                <div class="auth-footer-toggle">
+                    <span id="authToggleText">Don't have an account?</span>
+                    <button type="button" class="auth-toggle-btn" id="authToggleBtn">Create one</button>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <script src="./app.js"></script>
+</body>
+</html>

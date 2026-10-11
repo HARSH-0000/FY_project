@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: irium_postgres
+    environment:
+      POSTGRES_USER: irium
+      POSTGRES_PASSWORD: irium_password
+      POSTGRES_DB: irium_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U irium"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: irium_app
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://irium:irium_password@postgres:5432/irium_db
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - LLM_PROVIDER=${LLM_PROVIDER:-google}
+      - LLM_MODEL=${LLM_MODEL:-gemini-1.5-flash}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - APP_ENV=production
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./data/uploads:/app/data/uploads
+      - ./frontend:/app/frontend
+
+volumes:
+  postgres_data:
