@@ -21,6 +21,16 @@ Evaluation Criteria:
 - Is any critical information missing?
 - Are there contradictions or inconsistencies?
 
+Scoring Guidelines:
+- 0.8-1.0: Excellent - Comprehensive, well-supported, addresses query fully
+- 0.6-0.79: Good - Addresses query adequately, minor gaps acceptable
+- 0.4-0.59: Fair - Partial answer, significant gaps but some value
+- 0.0-0.39: Poor - Missing critical information or major inaccuracies
+
+**Be lenient**: If the answer provides useful information and addresses the main query, 
+mark it as acceptable even if some details are missing. Only request correction if the 
+answer is fundamentally incomplete or incorrect.
+
 Output Format:
 Provide a JSON object with:
 {
@@ -32,9 +42,7 @@ Provide a JSON object with:
     "needs_correction": true/false,
     "correction_needed": "What needs to be fixed or researched further",
     "feedback": "Overall assessment"
-}
-
-Be strict in your evaluation - only mark as acceptable if the answer truly addresses the query well."""
+}"""
 
 
 class CriticAgent:

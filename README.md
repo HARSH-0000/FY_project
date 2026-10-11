@@ -215,6 +215,27 @@ FY Project 11/
 
 ## 🚀 Getting Started
 
+### Quick Deploy
+
+**Windows Users**:
+```powershell
+.\deploy.ps1
+```
+
+**Linux/Mac Users**:
+```bash
+chmod +x deploy.sh
+./deploy.sh
+```
+
+The deployment script will guide you through:
+- Local development setup
+- Docker deployment
+- Production deployment options
+- Health checks
+
+For detailed deployment instructions, see **[DEPLOYMENT.md](DEPLOYMENT.md)**.
+
 ### Prerequisites
 
 - **Python 3.13** or compatible version
@@ -224,7 +245,7 @@ FY Project 11/
   - Google Gemini API key OR Groq API key
   - Tavily Search API key
 
-### Installation
+### Manual Installation
 
 1. **Clone the repository**:
    ```bash
@@ -303,6 +324,18 @@ FY Project 11/
 
 ### Docker Deployment
 
+**Quick Start**:
+```bash
+# Windows
+.\deploy.ps1
+# Select option 2
+
+# Linux/Mac
+./deploy.sh
+# Select option 2
+```
+
+**Manual Docker Deployment**:
 ```bash
 # Build and run with Docker Compose
 docker-compose up -d
@@ -313,6 +346,20 @@ docker-compose logs -f
 # Stop services
 docker-compose down
 ```
+
+For more deployment options (AWS, GCP, Azure, Railway, Render), see **[DEPLOYMENT.md](DEPLOYMENT.md)**.
+
+---
+
+## 📖 Documentation
+
+- **[DEPLOYMENT.md](DEPLOYMENT.md)** - Comprehensive deployment guide for all platforms
+- **[docs/OBSERVABILITY.md](docs/OBSERVABILITY.md)** - Monitoring and metrics
+- **[docs/PII_PROTECTION.md](docs/PII_PROTECTION.md)** - Privacy and security features
+- **[docs/REDIS_CACHING.md](docs/REDIS_CACHING.md)** - Caching strategy and configuration
+- **[docs/PERSISTENT_MEMORY.md](docs/PERSISTENT_MEMORY.md)** - Memory management
+
+---
 
 ## 📚 API Documentation
 
@@ -552,9 +599,45 @@ Contributions are welcome! Please follow these guidelines:
 - Tavily for search API
 - FastAPI for the excellent web framework
 
+## 📦 Available Deployment Scripts
+
+This project includes automated deployment scripts for your convenience:
+
+- **`deploy.ps1`** - PowerShell deployment script for Windows
+- **`deploy.sh`** - Bash deployment script for Linux/Mac
+- **Interactive menus** for local, Docker, and production deployments
+- **Health checks** and **Redis setup** included
+
+Simply run the script and follow the prompts:
+```powershell
+# Windows
+.\deploy.ps1
+
+# Linux/Mac
+./deploy.sh
+```
+
+## 📖 Additional Documentation
+
+- **[QUICKSTART.md](QUICKSTART.md)** - Get up and running in 5 minutes
+- **[DEPLOYMENT.md](DEPLOYMENT.md)** - Comprehensive deployment guide for all platforms
+- **[DEPLOYMENT_SUMMARY.md](DEPLOYMENT_SUMMARY.md)** - Quick reference and comparison of deployment options
+
 ## 📞 Support
 
 For issues, questions, or contributions, please open an issue on the repository.
+
+## 🗺️ Roadmap
+
+Future enhancements planned:
+- [ ] Support for additional LLM providers (OpenAI, Anthropic)
+- [ ] Enhanced visualization of research workflows
+- [ ] Real-time collaboration features
+- [ ] Advanced document comparison
+- [ ] Industry-specific research templates
+- [ ] API rate limiting and quota management
+- [ ] WebSocket support for real-time updates
+- [ ] Export research reports to PDF/DOCX
 
 ---
 

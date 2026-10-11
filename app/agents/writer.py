@@ -95,15 +95,26 @@ Create a comprehensive answer based on this evidence."""
             raise
     
     def _format_evidence(self, evidence: List[Dict]) -> str:
-        """Format evidence for LLM."""
+        """Format evidence for LLM with token optimization."""
         formatted = []
         
-        for idx, item in enumerate(evidence, 1):
+        # Sort by confidence and take top 25 most relevant evidence items
+        sorted_evidence = sorted(
+            evidence,
+            key=lambda x: x.get('confidence', 0.0),
+            reverse=True
+        )[:25]
+        
+        for idx, item in enumerate(sorted_evidence, 1):
+            details = item.get('evidence_text', 'N/A')
+            if len(details) > 350:
+                details = details[:350] + "..."
+            
             formatted.append(f"""
 Evidence {idx}:
 Claim: {item.get('claim', 'N/A')}
 Source: {item.get('source_title', 'N/A')} ({item.get('source_url', 'N/A')})
-Details: {item.get('evidence_text', 'N/A')}
+Details: {details}
 Confidence: {item.get('confidence', 0.0):.2f}
 ---""")
         

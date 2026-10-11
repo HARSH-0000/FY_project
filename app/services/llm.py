@@ -18,16 +18,18 @@ class LLMService:
     def _get_fallback_models(self):
         """Get fallback models based on current provider."""
         if self.provider == "groq":
-            # Groq fallback chain - using currently available models (Sep 2026)
+            # Groq fallback chain: try available models then Google
             return [
-                ("groq", "openai/gpt-oss-20b"),  # Fast (1000 T/sec), available
-                ("groq", "qwen/qwen3.8-27b"),  # Alternative Groq model
-                ("google", "gemini-1.5-pro"),  # Google fallback
+                ("google", "gemini-flash-latest"),
+                ("google", "gemini-3.8-flash"),
+                ("groq", "openai/gpt-oss-20b"),
+                ("groq", "qwen/qwen3.8-27b"),
             ]
         elif self.provider == "google":
             # Google fallback chain
             return [
-                ("google", "gemini-1.5-pro"),
+                ("google", "gemini-3.8-flash"),
+                ("google", "gemini-flash-latest"),
                 ("groq", "openai/gpt-oss-20b"),
                 ("groq", "qwen/qwen3.8-27b"),
             ]
@@ -41,6 +43,17 @@ class LLMService:
         if provider_to_use == "google":
             if not settings.GOOGLE_API_KEY:
                 raise ValueError("GOOGLE_API_KEY not configured")
+            
+            # Map legacy/deprecated model names to current available models
+            legacy_map = {
+                "gemini-1.5-flash": "gemini-flash-latest",
+                "gemini-1.5-pro": "gemini-3.8-flash",
+                "gemini-2.0-flash": "gemini-flash-latest",
+                "gemini-2.5-flash": "gemini-flash-latest",
+                "gemini-2.5-pro": "gemini-3.8-flash",
+            }
+            model_to_use = legacy_map.get(model_to_use, model_to_use)
+            
             return ChatGoogleGenerativeAI(
                 google_api_key=settings.GOOGLE_API_KEY,
                 model=model_to_use,

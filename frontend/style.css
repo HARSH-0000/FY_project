@@ -781,6 +781,37 @@ body {
     stroke-width: 2;
 }
 
+/* Stop Button */
+.stop-btn {
+    width: 36px;
+    height: 36px;
+    border: none;
+    background: var(--error, #ef4444);
+    color: white;
+    cursor: pointer;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s, transform 0.1s;
+}
+
+.stop-btn:hover {
+    background: #dc2626;
+    transform: scale(1.05);
+}
+
+.stop-btn:active {
+    transform: scale(0.95);
+}
+
+.stop-btn svg {
+    width: 16px;
+    height: 16px;
+    stroke-width: 2;
+    fill: white;
+}
+
 .input-footer {
     max-width: 800px;
     margin: 8px auto 0;
