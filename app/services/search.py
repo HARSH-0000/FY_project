@@ -93,23 +93,41 @@ class SearchService:
         
         return priority
     
-    async def search_with_context(self, query: str) -> Dict:
-        """Search with Tavily's instant answer."""
+    async def search_with_context(self, query: str, search_depth: str = "basic") -> Dict:
+        """Search with Tavily's instant answer and caching."""
         try:
-            result = await self.tavily.search_with_answer(query)
-            
+            import time
+            from app.core.observability import trace_span, metrics
+            from app.services.cache import cache_service
+
+            cache_key = cache_service.build_key("search_context", query, depth=search_depth)
+            cached_result = await cache_service.get(cache_key)
+            if cached_result is not None:
+                logger.info(f"Search context Cache HIT for: '{query[:40]}...'")
+                return cached_result
+
+            start_time = time.time()
+            with trace_span("retrieval:search_with_context", {"query": query[:50]}) as span:
+                result = await self.tavily.search_with_answer(query, search_depth=search_depth)
+
+            duration_ms = (time.time() - start_time) * 1000
+            metrics.record_retrieval(duration_ms)
+
             # Add priority scores
-            for item in result["results"]:
+            for item in result.get("results", []):
                 item["priority_score"] = self._calculate_priority(item)
-            
+
             # Sort results
-            result["results"].sort(
+            result.get("results", []).sort(
                 key=lambda x: (x["priority_score"], x.get("score", 0)),
                 reverse=True
             )
-            
+
+            # Cache search context for 30 minutes (1800s)
+            await cache_service.set(cache_key, result, ttl_seconds=1800)
+            logger.info(f"Search with context completed in {round(duration_ms, 2)}ms")
             return result
-            
+
         except Exception as e:
             logger.error(f"Search with context failed: {e}")
             raise

@@ -22,6 +22,19 @@ const newChatBtn = document.getElementById('newChatBtn');
 const attachBtn = document.getElementById('attachBtn');
 const fileInput = document.getElementById('fileInput');
 const fileCount = document.getElementById('fileCount');
+
+// Document Intelligence DOM Elements
+const inputErrorBanner = document.getElementById('inputErrorBanner');
+const inputErrorText = document.getElementById('inputErrorText');
+const closeErrorBannerBtn = document.getElementById('closeErrorBannerBtn');
+const activeDocBanner = document.getElementById('activeDocBanner');
+const activeDocName = document.getElementById('activeDocName');
+const activeDocPages = document.getElementById('activeDocPages');
+const detachDocBtn = document.getElementById('detachDocBtn');
+const uploadProgressContainer = document.getElementById('uploadProgressContainer');
+const progressBarFill = document.getElementById('progressBarFill');
+const progressStatusText = document.getElementById('progressStatusText');
+const attachmentPreviewTray = document.getElementById('attachmentPreviewTray');
 // Bottom-Left Auth Elements
 const sidebarFooter = document.getElementById('sidebarFooter');
 const authLoggedOut = document.getElementById('authLoggedOut');
@@ -64,6 +77,7 @@ document.addEventListener('DOMContentLoaded', () => {
     autoResizeTextarea();
     restoreAuthSession();
     checkUrlPrompt();
+    updateActiveDocBanner();
 });
 
 function checkUrlPrompt() {
@@ -107,6 +121,14 @@ function setupEventListeners() {
 
     // Stop button
     stopBtn.addEventListener('click', handleStopGeneration);
+
+    // Document Intelligence listeners
+    if (closeErrorBannerBtn) {
+        closeErrorBannerBtn.addEventListener('click', hideInputError);
+    }
+    if (detachDocBtn) {
+        detachDocBtn.addEventListener('click', detachCurrentDocument);
+    }
 
     // Bottom-Left Auth Controls
     if (loginSignupBtn) {
@@ -371,8 +393,10 @@ function renderAuthState() {
     if (!authLoggedOut || !authLoggedIn) return;
 
     if (currentUser) {
-        authLoggedOut.style.display = 'none';
-        authLoggedIn.style.display = 'flex';
+        authLoggedOut.style.setProperty('display', 'none', 'important');
+        authLoggedOut.classList.add('hidden');
+        authLoggedIn.style.setProperty('display', 'flex', 'important');
+        authLoggedIn.classList.remove('hidden');
 
         const displayName = currentUser.full_name || currentUser.username || (currentUser.email ? currentUser.email.split('@')[0] : 'User');
         const displayEmail = currentUser.email || '';
@@ -382,8 +406,10 @@ function renderAuthState() {
         if (userDisplayName) userDisplayName.textContent = displayName;
         if (userDisplayEmail) userDisplayEmail.textContent = displayEmail;
     } else {
-        authLoggedIn.style.display = 'none';
-        authLoggedOut.style.display = 'block';
+        authLoggedIn.style.setProperty('display', 'none', 'important');
+        authLoggedIn.classList.add('hidden');
+        authLoggedOut.style.setProperty('display', 'flex', 'important');
+        authLoggedOut.classList.remove('hidden');
     }
 }
 
@@ -395,8 +421,11 @@ function autoResizeTextarea() {
 
 // Toggle send button
 function toggleSendButton() {
-    const hasText = messageInput.value.trim().length > 0;
-    sendBtn.disabled = !hasText || isProcessing;
+    const hasText = messageInput && messageInput.value.trim().length > 0;
+    const hasFiles = uploadedFiles && uploadedFiles.length > 0;
+    if (sendBtn) {
+        sendBtn.disabled = (!hasText && !hasFiles) || isProcessing;
+    }
 }
 
 // Start new chat
@@ -408,6 +437,10 @@ function startNewChat() {
 
     currentChatId = generateChatId();
     uploadedFiles = [];
+    renderAttachmentChips();
+    hideInputError();
+    hideUploadProgress();
+    updateActiveDocBanner();
     messagesContainer.innerHTML = '';
     messageInput.value = '';
     autoResizeTextarea();
@@ -419,14 +452,29 @@ function startNewChat() {
 
 // Handle send message
 async function handleSendMessage() {
-    const message = messageInput.value.trim();
-    if (!message || isProcessing) return;
+    let message = messageInput.value.trim();
+    const hasFiles = uploadedFiles.length > 0;
+    const activeDoc = getActiveSessionDoc(currentChatId);
 
-    // Hide welcome screen
+    if (!message && !hasFiles) return;
+    if (isProcessing) return;
+
+    // Default question if user uploaded file without typing text
+    if (!message && hasFiles) {
+        message = "Summarize this document and highlight key findings, figures, and major financial risks.";
+    }
+
+    hideInputError();
     welcomeScreen.style.display = 'none';
 
-    // Add user message
-    addMessage('user', message);
+    // Add user message (with attached file badges if any)
+    let displayMessage = message;
+    if (hasFiles) {
+        const fileBadges = uploadedFiles.map(f => `📎 [${escapeHtml(f.name)}]`).join(' ');
+        displayMessage = `${escapeHtml(message)}\n\n${fileBadges}`;
+    }
+
+    addMessage('user', displayMessage);
 
     // Clear input
     messageInput.value = '';
@@ -437,25 +485,28 @@ async function handleSendMessage() {
     setProcessingState(true);
 
     try {
-        if (uploadedFiles.length > 0) {
-            // Document analysis mode
+        if (hasFiles) {
+            // New document upload & analysis mode
             await handleDocumentAnalysis(message);
+        } else if (activeDoc) {
+            // Follow-up question about the document in this conversation
+            await handleDocumentFollowUp(message);
         } else {
-            // Research mode
+            // Standard financial research mode
             await handleResearch(message);
         }
     } catch (error) {
         console.error('Error:', error);
-        
-        // Check if it's a rate limit error
         const errorMessage = error.message || JSON.stringify(error);
         if (errorMessage.includes('rate_limit') || errorMessage.includes('429')) {
-            addMessage('assistant', '⚠️ Rate limit reached. The system is automatically switching to a backup model. Please try your query again in a moment.');
+            addMessage('assistant', '⚠️ Rate limit reached. The system is automatically retrying with a backup model. Please try your query again in a moment.');
         } else {
-            addMessage('assistant', '❌ Sorry, I encountered an error. Please try again.');
+            showInputError(error.message || 'Failed to process request.');
+            addMessage('assistant', `❌ Error: ${error.message || 'Sorry, I encountered an issue processing your request.'}`);
         }
     } finally {
         setProcessingState(false);
+        hideUploadProgress();
     }
 
     // Save to history
@@ -498,12 +549,29 @@ function handleStopGeneration() {
         currentRequestController.abort();
         currentRequestController = null;
     }
+    hideUploadProgress();
     setProcessingState(false);
+}
+
+// Extract conversation turns for reference resolution
+function getRecentConversationTurns() {
+    const turns = [];
+    const messageElements = messagesContainer.querySelectorAll('.message');
+    messageElements.forEach(el => {
+        const isUser = el.classList.contains('user');
+        const text = el.querySelector('.message-content') ? el.querySelector('.message-content').innerText : '';
+        if (text) {
+            turns.push({
+                role: isUser ? 'user' : 'assistant',
+                content: text.slice(0, 300)
+            });
+        }
+    });
+    return turns.slice(-4);
 }
 
 // Handle research request
 async function handleResearch(query) {
-    // Add loading message
     const loadingId = addLoadingMessage();
     currentRequestController = new AbortController();
 
@@ -519,15 +587,12 @@ async function handleResearch(query) {
         });
 
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            const errData = await response.json().catch(() => ({}));
+            throw new Error(errData.detail || `HTTP error! status: ${response.status}`);
         }
 
         const data = await response.json();
-        
-        // Remove loading message
         removeMessage(loadingId);
-
-        // Add response message
         addResearchMessage(data);
 
     } catch (error) {
@@ -540,17 +605,23 @@ async function handleResearch(query) {
     }
 }
 
-// Handle document analysis request
+// Handle document analysis request with upload
 async function handleDocumentAnalysis(query) {
     const loadingId = addLoadingMessage();
     currentRequestController = new AbortController();
+    showUploadProgress(25, 'Uploading and validating documents...');
 
     try {
         const formData = new FormData();
         formData.append('query', query);
+        formData.append('session_id', currentChatId);
+        formData.append('conversation_history', JSON.stringify(getRecentConversationTurns()));
+
         uploadedFiles.forEach(file => {
             formData.append('files', file);
         });
+
+        showUploadProgress(55, 'Extracting text, tables, and visual layout...');
 
         const response = await fetch(apiUrl('/api/documents/analyze'), {
             method: 'POST',
@@ -560,19 +631,86 @@ async function handleDocumentAnalysis(query) {
         });
 
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            const errData = await response.json().catch(() => ({}));
+            const errMsg = typeof errData.detail === 'string' ? errData.detail : (errData.detail?.message || `Upload failed (${response.status})`);
+            throw new Error(errMsg);
         }
 
+        showUploadProgress(85, 'Synthesizing evidence and insights...');
         const data = await response.json();
         
+        showUploadProgress(100, 'Analysis complete!');
+        setTimeout(hideUploadProgress, 800);
+
         removeMessage(loadingId);
         addDocumentAnalysisMessage(data);
 
+        // Save active document state for this conversation
+        if (data.documents && data.documents.length > 0) {
+            saveActiveSessionDoc(currentChatId, {
+                docId: data.primary_document_id || (data.document_ids && data.document_ids[0]) || '',
+                filename: data.documents.join(', '),
+                pageCount: data.metadata?.page_count || 1
+            });
+            updateActiveDocBanner();
+        }
+
         // Clear uploaded files after processing
         uploadedFiles = [];
+        renderAttachmentChips();
         updateFileCount();
 
     } catch (error) {
+        hideUploadProgress();
+        removeMessage(loadingId);
+        if (error.name !== 'AbortError') {
+            throw error;
+        } else {
+            addMessage('assistant', '⚠️ Generation stopped by user.');
+        }
+    }
+}
+
+// Handle follow-up questions for existing document in conversation
+async function handleDocumentFollowUp(query) {
+    const loadingId = addLoadingMessage();
+    currentRequestController = new AbortController();
+    showUploadProgress(40, 'Searching active document evidence...');
+
+    try {
+        const activeDoc = getActiveSessionDoc(currentChatId);
+        const formData = new FormData();
+        formData.append('query', query);
+        formData.append('session_id', currentChatId);
+        if (activeDoc && activeDoc.docId) {
+            formData.append('document_id', activeDoc.docId);
+        }
+        formData.append('conversation_history', JSON.stringify(getRecentConversationTurns()));
+
+        showUploadProgress(70, 'Retrieving relevant pages and generating answer...');
+
+        const response = await fetch(apiUrl('/api/documents/analyze'), {
+            method: 'POST',
+            headers: authHeaders(),
+            body: formData,
+            signal: currentRequestController.signal,
+        });
+
+        if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            const errMsg = typeof errData.detail === 'string' ? errData.detail : (errData.detail?.message || `Follow-up failed (${response.status})`);
+            throw new Error(errMsg);
+        }
+
+        showUploadProgress(100, 'Done!');
+        setTimeout(hideUploadProgress, 600);
+
+        const data = await response.json();
+        removeMessage(loadingId);
+        addDocumentAnalysisMessage(data);
+
+    } catch (error) {
+        hideUploadProgress();
         removeMessage(loadingId);
         if (error.name !== 'AbortError') {
             throw error;
@@ -592,13 +730,17 @@ function addMessage(role, content, metadata = {}) {
     const avatar = role === 'user' ? 'You' : 'AI';
     const avatarInitial = role === 'user' ? 'Y' : 'I';
 
+    const renderedContent = role === 'user'
+        ? formatMessage(content, metadata, 'user')
+        : formatMarkdown(content);
+
     messageDiv.innerHTML = `
         <div class="message-header">
             <div class="message-avatar">${avatarInitial}</div>
             <div class="message-author">${avatar}</div>
         </div>
         <div class="message-content">
-            ${formatMessage(content, metadata)}
+            ${renderedContent}
         </div>
     `;
 
@@ -682,18 +824,44 @@ function addDocumentAnalysisMessage(data) {
     messageDiv.className = 'message assistant';
     messageDiv.id = messageId;
 
+    let formattedAnswer = formatMarkdown(data.answer);
+
+    // Highlight [Page X] citations as interactive pills
+    formattedAnswer = formattedAnswer.replace(/\[Page\s+(\d+)\]/gi, (match, pNum) => {
+        return `<span class="citation-pill">📄 Page ${pNum}</span>`;
+    });
+    formattedAnswer = formattedAnswer.replace(/\[([^\]]+,\s*Page\s+\d+)\]/gi, (match, fullRef) => {
+        return `<span class="citation-pill">📄 ${escapeHtml(fullRef)}</span>`;
+    });
+    formattedAnswer = formattedAnswer.replace(/\[Page\s+\d+\s+Visual\s+Analysis\]/gi, (match) => {
+        return `<span class="citation-pill image-ref">🖼️ Visual Analysis</span>`;
+    });
+
     let content = `
-        ${formatMarkdown(data.answer)}
+        ${formattedAnswer}
     `;
 
-    // Add document sources
-    if (data.documents && data.documents.length > 0) {
+    // Add document sources and cited pages
+    const isGeneralQuery = Boolean(data.metadata && data.metadata.is_general_query);
+    const hasDocs = !isGeneralQuery && data.documents && data.documents.length > 0;
+    const hasPages = !isGeneralQuery && data.source_pages && data.source_pages.length > 0;
+
+    if (hasDocs || hasPages) {
         content += '<div class="sources">';
-        content += '<div class="sources-title">Analyzed Documents:</div>';
+        content += '<div class="sources-title">Document Evidence:</div>';
         content += '<div class="source-list">';
-        data.documents.forEach(doc => {
-            content += `<div class="source-link">📄 ${doc}</div>`;
-        });
+
+        if (hasDocs) {
+            data.documents.forEach(doc => {
+                content += `<div class="source-link">📄 ${escapeHtml(doc)}</div>`;
+            });
+        }
+
+        if (hasPages) {
+            const pageTags = data.source_pages.map(p => `<span class="citation-pill">Page ${p}</span>`).join(' ');
+            content += `<div style="margin-top: 4px; font-size: 12px; color: var(--text-secondary);">Pages referenced: ${pageTags}</div>`;
+        }
+
         content += '</div></div>';
     }
 
@@ -709,6 +877,11 @@ function addDocumentAnalysisMessage(data) {
 
     messagesContainer.appendChild(messageDiv);
     scrollToBottom();
+
+    // Auto-save messages to preserve in chat history
+    if (currentChatId) {
+        saveCurrentChatMessages();
+    }
 
     return messageId;
 }
@@ -749,52 +922,195 @@ function removeMessage(messageId) {
 }
 
 // Format message content
-function formatMessage(content, metadata = {}) {
+function formatMessage(content, metadata = {}, role = 'assistant') {
+    if (role === 'user') {
+        const escaped = escapeHtml(content || '');
+        return escaped.split('\n\n').map(para => `<p>${para.replace(/\n/g, '<br>')}</p>`).join('');
+    }
     return formatMarkdown(content);
 }
 
-// Render structured answer format
+// Render markdown and structured answer format
 function formatMarkdown(answer) {
     if (!answer) return '';
 
     // Check if answer is structured JSON format
     if (typeof answer === 'object' && answer.sections) {
-        return renderStructuredAnswer(answer);
+        // Check if any section contains nested JSON in its content
+        let hasNestedJson = false;
+        if (Array.isArray(answer.sections)) {
+            for (let section of answer.sections) {
+                if (section.content && typeof section.content === 'string') {
+                    const content = section.content.trim();
+                    // Check if content is JSON
+                    if (content.startsWith('{') && content.includes('sections')) {
+                        try {
+                            const parsedContent = JSON.parse(content);
+                            if (parsedContent.sections && Array.isArray(parsedContent.sections)) {
+                                console.log('Detected nested JSON in section content, parsing as structured data');
+                                return `<div class="markdown-content">${renderStructuredAnswer(parsedContent)}</div>`;
+                            }
+                        } catch (e) {
+                            // Not valid JSON, continue with normal rendering
+                        }
+                    }
+                }
+            }
+        }
+        
+        // No nested JSON found, render normally
+        return `<div class="markdown-content">${renderStructuredAnswer(answer)}</div>`;
     }
 
-    // Fallback: treat as plain text
-    const escapeHtml = (str) => {
-        const div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
-    };
+    if (typeof answer !== 'string') {
+        answer = String(answer);
+    }
 
-    let html = escapeHtml(answer);
-    html = html.split('\n\n').map(para => {
-        return `<p>${para.replace(/\n/g, '<br>')}</p>`;
-    }).join('');
+    // Check if the string content looks like JSON and try to parse it
+    if (answer.trim().startsWith('{') && answer.includes('sections') && answer.includes('type')) {
+        try {
+            const parsedAnswer = JSON.parse(answer);
+            if (parsedAnswer.sections && Array.isArray(parsedAnswer.sections)) {
+                console.log('Detected embedded JSON in string content, parsing as structured data');
+                return `<div class="markdown-content">${renderStructuredAnswer(parsedAnswer)}</div>`;
+            }
+        } catch (e) {
+            console.warn('Content looks like JSON but failed to parse:', e);
+            // Continue with regular text processing
+        }
+    }
 
-    return html;
+    let parsedHtml = '';
+
+    if (typeof marked !== 'undefined' && marked.parse) {
+        try {
+            // Configure marked with GFM, breaks, and custom table wrapper hook
+            marked.use({
+                gfm: true,
+                breaks: true,
+                hooks: {
+                    postprocess(html) {
+                        // Wrap all <table> elements in .markdown-table-wrapper for horizontal scroll
+                        return html.replace(/<table(\s*[^>]*)?>([\s\S]*?)<\/table>/gi, (match) => {
+                            return `<div class="markdown-table-wrapper">${match}</div>`;
+                        });
+                    }
+                }
+            });
+
+            parsedHtml = marked.parse(answer);
+        } catch (err) {
+            console.error('Error in marked parser:', err);
+            parsedHtml = fallbackMarkdownParse(answer);
+        }
+    } else {
+        parsedHtml = fallbackMarkdownParse(answer);
+    }
+
+    // Highlight [Page X] citations as interactive pills
+    parsedHtml = parsedHtml.replace(/\[Page\s+(\d+)\]/gi, (match, pNum) => {
+        return `<span class="citation-pill">📄 Page ${pNum}</span>`;
+    });
+    parsedHtml = parsedHtml.replace(/\[([^\]]+,\s*Page\s+\d+)\]/gi, (match, fullRef) => {
+        return `<span class="citation-pill">📄 ${escapeHtml(fullRef)}</span>`;
+    });
+    parsedHtml = parsedHtml.replace(/\[Page\s+\d+\s+Visual\s+Analysis\]/gi, () => {
+        return `<span class="citation-pill image-ref">🖼️ Visual Analysis</span>`;
+    });
+
+    // Sanitize with DOMPurify if available
+    if (typeof DOMPurify !== 'undefined' && DOMPurify.sanitize) {
+        parsedHtml = DOMPurify.sanitize(parsedHtml, {
+            ADD_ATTR: ['target', 'rel', 'class', 'style'],
+            ADD_TAGS: ['span', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'div', 'input']
+        });
+    }
+
+    return `<div class="markdown-content">${parsedHtml}</div>`;
+}
+
+// Fallback basic markdown parser if marked library is not available
+function fallbackMarkdownParse(text) {
+    if (!text) return '';
+    let codeBlocks = [];
+    text = text.replace(/```([a-z0-9_-]*)\n([\s\S]*?)```/gi, (match, lang, code) => {
+        const id = `__CODE_BLOCK_${codeBlocks.length}__`;
+        codeBlocks.push(`<pre><code class="language-${escapeHtml(lang)}">${escapeHtml(code.trim())}</code></pre>`);
+        return id;
+    });
+
+    let inlineCodes = [];
+    text = text.replace(/`([^`]+)`/g, (match, code) => {
+        const id = `__INLINE_CODE_${inlineCodes.length}__`;
+        inlineCodes.push(`<code>${escapeHtml(code)}</code>`);
+        return id;
+    });
+
+    text = text.replace(/^###### (.*$)/gim, '<h6>$1</h6>');
+    text = text.replace(/^##### (.*$)/gim, '<h5>$1</h5>');
+    text = text.replace(/^#### (.*$)/gim, '<h4>$1</h4>');
+    text = text.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+    text = text.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+    text = text.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+
+    text = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    text = text.replace(/\*(.*?)\*/g, '<em>$1</em>');
+    text = text.replace(/~~(.*?)~~/g, '<del>$1</del>');
+
+    inlineCodes.forEach((c, i) => {
+        text = text.replace(`__INLINE_CODE_${i}__`, c);
+    });
+    codeBlocks.forEach((c, i) => {
+        text = text.replace(`__CODE_BLOCK_${i}__`, c);
+    });
+
+    return text.split('\n\n').map(p => p.trim() ? `<p>${p.replace(/\n/g, '<br>')}</p>` : '').join('');
 }
 
 // Render structured answer with sections and tables
 function renderStructuredAnswer(data) {
     if (!data.sections || !Array.isArray(data.sections)) {
+        console.warn('Invalid structured answer format:', data);
         return '<p>Invalid response format</p>';
     }
 
     let html = '';
 
-    data.sections.forEach(section => {
-        if (section.type === 'text') {
+    data.sections.forEach((section, index) => {
+        try {
+            if (section.type === 'text') {
+                html += `
+                    <div class="answer-section text-section">
+                        ${section.title ? `<h3 class="section-title">${escapeHtml(section.title)}</h3>` : ''}
+                        <div class="section-content">${formatTextContent(section.content)}</div>
+                    </div>
+                `;
+            } else if (section.type === 'table') {
+                html += renderTable(section);
+            } else {
+                // Handle unknown section types gracefully
+                console.warn(`Unknown section type '${section.type}' at index ${index}`);
+                if (section.content) {
+                    html += `
+                        <div class="answer-section text-section">
+                            ${section.title ? `<h3 class="section-title">${escapeHtml(section.title)}</h3>` : ''}
+                            <div class="section-content">${formatTextContent(section.content)}</div>
+                        </div>
+                    `;
+                }
+            }
+        } catch (error) {
+            console.error(`Error rendering section ${index}:`, error, section);
+            // Render a fallback for this section
             html += `
                 <div class="answer-section text-section">
-                    ${section.title ? `<h3 class="section-title">${escapeHtml(section.title)}</h3>` : ''}
-                    <div class="section-content">${formatTextContent(section.content)}</div>
+                    <h3 class="section-title">Section ${index + 1}</h3>
+                    <div class="section-content">
+                        <p>Error rendering this section. Raw content:</p>
+                        <pre>${escapeHtml(JSON.stringify(section, null, 2))}</pre>
+                    </div>
                 </div>
             `;
-        } else if (section.type === 'table') {
-            html += renderTable(section);
         }
     });
 
@@ -864,21 +1180,195 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// File handling
+// ============================================================================
+// Document Intelligence & File Handling Helpers
+// ============================================================================
+
+const ALLOWED_EXTENSIONS = ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'docx', 'txt'];
+const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024; // 50MB
+
+function showInputError(message) {
+    if (!inputErrorBanner || !inputErrorText) return;
+    inputErrorText.textContent = message;
+    inputErrorBanner.style.display = 'flex';
+}
+
+function hideInputError() {
+    if (inputErrorBanner) {
+        inputErrorBanner.style.display = 'none';
+    }
+}
+
+function showUploadProgress(percent, statusText) {
+    if (!uploadProgressContainer) return;
+    uploadProgressContainer.style.display = 'block';
+    if (progressBarFill) progressBarFill.style.width = `${percent}%`;
+    if (progressStatusText) progressStatusText.textContent = statusText;
+}
+
+function hideUploadProgress() {
+    if (!uploadProgressContainer) return;
+    uploadProgressContainer.style.display = 'none';
+    if (progressBarFill) progressBarFill.style.width = '0%';
+}
+
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function getFileIcon(filename) {
+    const ext = filename.split('.').pop().toLowerCase();
+    if (ext === 'pdf') return '📄';
+    if (['png', 'jpg', 'jpeg', 'webp'].includes(ext)) return '🖼️';
+    if (ext === 'docx') return '📝';
+    return '📄';
+}
+
+// File handling with validation
 function handleFileSelection(event) {
     const files = Array.from(event.target.files);
-    uploadedFiles = [...uploadedFiles, ...files];
+    if (!files || files.length === 0) return;
+
+    hideInputError();
+    const validFiles = [];
+
+    for (const file of files) {
+        const ext = file.name.split('.').pop().toLowerCase();
+
+        // 1. Format validation
+        if (!ALLOWED_EXTENSIONS.includes(ext)) {
+            showInputError(`File "${file.name}" has an unsupported format (.${ext}). Supported: PDF, PNG, JPG, JPEG, WEBP.`);
+            fileInput.value = '';
+            return;
+        }
+
+        // 2. Size validation
+        if (file.size > MAX_FILE_SIZE_BYTES) {
+            showInputError(`File "${file.name}" (${formatBytes(file.size)}) exceeds the maximum allowed limit of 50MB.`);
+            fileInput.value = '';
+            return;
+        }
+
+        validFiles.push(file);
+    }
+
+    uploadedFiles = [...uploadedFiles, ...validFiles];
+    renderAttachmentChips();
     updateFileCount();
+    toggleSendButton();
     fileInput.value = ''; // Reset input
 }
 
+function renderAttachmentChips() {
+    if (!attachmentPreviewTray) return;
+
+    if (uploadedFiles.length === 0) {
+        attachmentPreviewTray.style.display = 'none';
+        attachmentPreviewTray.innerHTML = '';
+        return;
+    }
+
+    attachmentPreviewTray.style.display = 'flex';
+    attachmentPreviewTray.innerHTML = uploadedFiles.map((file, idx) => `
+        <div class="attachment-chip" title="${escapeHtml(file.name)}">
+            <span class="chip-icon">${getFileIcon(file.name)}</span>
+            <span class="chip-name">${escapeHtml(file.name)}</span>
+            <span class="chip-size">(${formatBytes(file.size)})</span>
+            <button type="button" class="chip-remove-btn" onclick="removeAttachment(${idx})" title="Remove file">&times;</button>
+        </div>
+    `).join('');
+}
+
+window.removeAttachment = function(index) {
+    if (index >= 0 && index < uploadedFiles.length) {
+        uploadedFiles.splice(index, 1);
+        renderAttachmentChips();
+        updateFileCount();
+        toggleSendButton();
+        if (uploadedFiles.length === 0) {
+            hideInputError();
+        }
+    }
+};
+
 function updateFileCount() {
+    if (!fileCount) return;
     if (uploadedFiles.length > 0) {
         fileCount.textContent = `📎 ${uploadedFiles.length} file${uploadedFiles.length > 1 ? 's' : ''} attached`;
         fileCount.style.display = 'block';
     } else {
         fileCount.style.display = 'none';
     }
+}
+
+// Active document context management per conversation
+function getActiveSessionDoc(chatId) {
+    if (!chatId) return null;
+    try {
+        const stored = localStorage.getItem('irium_active_docs');
+        if (!stored) return null;
+        const map = JSON.parse(stored);
+        return map[chatId] || null;
+    } catch {
+        return null;
+    }
+}
+
+function saveActiveSessionDoc(chatId, docData) {
+    if (!chatId) return;
+    try {
+        const stored = localStorage.getItem('irium_active_docs');
+        const map = stored ? JSON.parse(stored) : {};
+        map[chatId] = docData;
+        localStorage.setItem('irium_active_docs', JSON.stringify(map));
+    } catch (e) {
+        console.warn('Could not save active doc context:', e);
+    }
+}
+
+function removeActiveSessionDoc(chatId) {
+    if (!chatId) return;
+    try {
+        const stored = localStorage.getItem('irium_active_docs');
+        if (stored) {
+            const map = JSON.parse(stored);
+            delete map[chatId];
+            localStorage.setItem('irium_active_docs', JSON.stringify(map));
+        }
+    } catch (e) {}
+}
+
+function updateActiveDocBanner() {
+    if (!activeDocBanner) return;
+    const activeDoc = getActiveSessionDoc(currentChatId);
+    if (activeDoc && activeDoc.filename) {
+        if (activeDocName) activeDocName.textContent = activeDoc.filename;
+        if (activeDocPages) {
+            activeDocPages.textContent = activeDoc.pageCount > 1 ? `${activeDoc.pageCount} pages` : '1 page';
+            activeDocPages.style.display = 'inline-block';
+        }
+        activeDocBanner.style.display = 'flex';
+    } else {
+        activeDocBanner.style.display = 'none';
+    }
+}
+
+async function detachCurrentDocument() {
+    if (!currentChatId) return;
+    try {
+        await fetch(apiUrl(`/api/documents/session/${currentChatId}`), {
+            method: 'DELETE',
+            headers: authHeaders()
+        }).catch(() => {});
+    } catch {}
+
+    removeActiveSessionDoc(currentChatId);
+    updateActiveDocBanner();
+    addMessage('assistant', '📄 Document detached from this conversation. Subsequent questions will use general financial research mode.');
 }
 
 // Chat history management
@@ -943,6 +1433,10 @@ function loadChatById(chatId) {
     // Clear current view
     messagesContainer.innerHTML = '';
     uploadedFiles = [];
+    renderAttachmentChips();
+    hideInputError();
+    hideUploadProgress();
+    updateActiveDocBanner();
     messageInput.value = '';
     autoResizeTextarea();
     setProcessingState(false);
@@ -967,12 +1461,23 @@ function loadChatById(chatId) {
                             <div class="message-content">${msg.content}</div>
                         `;
                     } else {
+                        let renderedContent = msg.content;
+                        if (typeof renderedContent === 'string' && !renderedContent.includes('markdown-content')) {
+                            const tempDiv = document.createElement('div');
+                            tempDiv.innerHTML = renderedContent;
+                            const rawText = tempDiv.innerText || tempDiv.textContent;
+                            if (rawText && (rawText.includes('#') || rawText.includes('|') || rawText.includes('**') || rawText.includes('```'))) {
+                                renderedContent = formatMarkdown(rawText);
+                            } else {
+                                renderedContent = `<div class="markdown-content">${renderedContent}</div>`;
+                            }
+                        }
                         messageDiv.innerHTML = `
                             <div class="message-header">
                                 <div class="message-avatar">I</div>
                                 <div class="message-author">Irium</div>
                             </div>
-                            <div class="message-content">${msg.content}</div>
+                            <div class="message-content">${renderedContent}</div>
                         `;
                     }
                     

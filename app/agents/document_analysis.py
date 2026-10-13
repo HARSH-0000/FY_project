@@ -1,172 +1,179 @@
+"""
+Document Analysis Agent for Irium FinTech System.
+Specializes in financial document analysis, numerical extraction, financial ratios,
+chart & table interpretation, cross-document comparison, and evidence-grounded QA.
+"""
+
 from app.services.llm import llm_service
 from app.core import logger
-from typing import List, Dict
+from typing import List, Dict, Any, Optional
 import json
+import re
 
+GROUNDED_SYSTEM_PROMPT = """You are Irium Document Intelligence, an expert AI FinTech analyst.
+Your task is to analyze financial documents, PDFs, reports, and visual charts to answer user questions with strict grounding in the provided document evidence.
 
-DOCUMENT_ANALYSIS_SYSTEM_PROMPT = """You are a document analysis expert specializing in financial documents and reports.
+CORE INSTRUCTIONS:
+1. DOCUMENT GROUNDING & COMPREHENSIVE RESPONSES:
+   - When answering questions about the uploaded document, base your analysis strictly on the provided document excerpts and evidence.
+   - Do NOT invent or hallucinate figures that are claimed to be from the document.
+   - If the user asks a question, concept, or comparison that the uploaded document DOES NOT contain information about (such as general institutional inquiries like Income Tax Department vs Vigilance Department, or general financial/economic definitions):
+     Clearly clarify that this topic is not covered in the uploaded document, and then provide a thorough, accurate, and comprehensive response answering the user's question in full detail.
+     Format the preamble as:
+     `*(Note: The uploaded document does not contain information regarding this topic. Providing institutional analysis on the query:)*`
 
-Your task is to analyze one or multiple documents to answer user questions or perform analysis.
+2. NUMERICAL & FINANCIAL PRECISION:
+   - Distinguish clearly between values EXPLICITLY STATED in the document and any values calculated by you (e.g. "Reported in document: $450M; Calculated YoY growth: +12.5%").
+   - Do NOT calculate financial ratios if the necessary input values are unavailable or ambiguous.
+   - Include currencies ($ , ₹ , €), units (Millions, Billions, Crores), and fiscal years/dates exactly as reported.
 
-Capabilities:
-- Summarization: Create concise summaries of documents
-- Comparison: Compare multiple documents on specific criteria
-- Data extraction: Extract specific financial metrics, dates, figures
-- Contradiction detection: Find conflicting information between documents
-- Cross-document analysis: Synthesize information across documents
-- Question answering: Answer questions based on document content
+3. PAGE CITATIONS & ATTRIBUTION:
+   - Always cite the specific page or source for document findings and numbers using format: `[Page X]` or `[filename, Page X]`.
+   - When discussing charts or images, reference the visual explicitly (e.g. `[Page 1 Visual Analysis]`).
+   - For general institutional answers not derived from document pages, page citations are not required.
 
-Guidelines:
-- Only use information explicitly in the documents
-- Always cite document names and sections when possible
-- Be precise with numbers, dates, and financial data
-- For multi-document analysis, clearly attribute information to specific documents
-- Identify contradictions or inconsistencies
-- If information is not in the documents, say so clearly
-- Never fabricate data or citations
+4. INTENTS SUPPORTED:
+   - Summarization: Concise executive summary, major milestones, and strategic takeaways.
+   - Numerical Extraction: Net profit, revenue, EBITDA, cash flows, margins, debt, assets.
+   - Risk Identification: Operational, financial, regulatory, and market risks stated in the report.
+   - Chart/Table Interpretation: Trends, axis ranges, legends, table comparisons.
+   - Cross-Document Comparison: Compare metrics side-by-side when multiple reports are uploaded.
+   - General & Institutional Inquiries: Comparative mandates, legal frameworks, and jurisdictional responsibilities.
+   - Page-Specific Inquiries: When asked about a specific page (e.g. "Explain page 5"), focus on that page's contents.
 
-Output Format:
-Provide a JSON object with:
-{
-    "executive_summary": "Brief overview of findings",
-    "key_findings": [
-        {
-            "finding": "Specific finding",
-            "document": "Document name",
-            "confidence": 0.0-1.0,
-            "supporting_text": "Relevant excerpt"
-        }
-    ],
-    "document_summaries": {
-        "document_name": "Summary for this document"
-    },
-    "cross_document_analysis": "Analysis comparing/contrasting documents",
-    "data_extracted": {
-        "Any structured data found (metrics, dates, figures)"
-    },
-    "contradictions": [
-        {
-            "issue": "What contradicts",
-            "document_1": "First document's position",
-            "document_2": "Second document's position"
-        }
-    ],
-    "answer": "Direct answer to the user's question",
-    "limitations": "Any limitations or missing information"
-}"""
+5. OUTPUT FORMAT:
+   - Format cleanly in professional Markdown with clear section headings, bullet points, and tables where suitable.
+"""
 
 
 class DocumentAnalysisAgent:
-    """Agent for analyzing single or multiple documents."""
-    
-    async def analyze(self, query: str, documents: List[Dict]) -> Dict:
+    """Agent for grounded analysis of uploaded documents and charts."""
+
+    async def answer_general_query(self, query: str, history_context: str = "") -> str:
+        """Answer a general or domain query when no document content is relevant."""
+        prompt = f"""You are Irium, an expert AI FinTech and institutional research assistant.
+The user has asked a question in a chat session where an uploaded document is active, but the document does not contain content relevant to this question.
+
+USER QUESTION:
+{query}
+
+{history_context}
+INSTRUCTIONS:
+1. Provide a comprehensive, clear, structured, and authoritative answer addressing the user's query in full detail (for example, if comparing government/financial entities like Income Tax Department vs Vigilance Department, thoroughly explain their mandates, jurisdiction, statutory powers, governing acts, and key differences).
+2. Start your response with a brief, clear introductory notice:
+*(Note: The uploaded document does not contain information regarding this topic. Providing institutional analysis on {query}:)*
+3. Use clean Markdown formatting with clear section headings, bullet points, and comparison tables where helpful.
+"""
+        from app.core.model_config import TaskType
+        return await llm_service.invoke(
+            system_prompt="You are Irium, an expert AI FinTech and institutional research assistant.",
+            user_message=prompt,
+            task_type=TaskType.QA_STANDARD
+        )
+
+    async def analyze(
+        self,
+        query: str,
+        documents: Optional[List[Dict[str, Any]]] = None,
+        retrieved_context: Optional[str] = None,
+        source_pages: Optional[List[int]] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> Dict[str, Any]:
         """
-        Analyze documents to answer a query.
+        Execute grounded analysis for a user query.
         
         Args:
-            query: User's analysis question
-            documents: List of document dicts with 'filename', 'text_content', 'metadata'
-        
+            query: User's question or instruction
+            documents: Optional list of documents uploaded in the current turn
+            retrieved_context: Context chunks retrieved from document store
+            source_pages: List of page numbers present in retrieved context
+            conversation_history: Recent conversation turns for resolving follow-up references
+            
         Returns:
-            Analysis result
+            Dict containing answer, source pages, and metadata.
         """
         try:
-            logger.info(f"Document analysis agent processing {len(documents)} documents")
-            
-            # Format documents for LLM
-            documents_context = self._format_documents(documents)
-            
-            user_message = f"""Question/Task: {query}
+            logger.info(f"DocumentAnalysisAgent analyzing query: {query}")
 
-Documents to analyze:
-{documents_context}
+            # Assemble document context
+            context_blocks = []
 
-Analyze these documents to answer the question or perform the requested analysis."""
-            
+            # 1. Add retrieved chunks if provided (for larger documents or follow-ups)
+            if retrieved_context:
+                context_blocks.append(f"### RETRIEVED DOCUMENT EVIDENCE:\n{retrieved_context}")
+
+            # 2. Add raw documents text if provided and not overly large
+            if documents:
+                for idx, doc in enumerate(documents, 1):
+                    fname = doc.get("filename", f"Document {idx}")
+                    content = doc.get("text_content", "")
+                    # Cap single document preview to avoid context blowup
+                    max_chars = 18000
+                    if len(content) > max_chars:
+                        content = content[:max_chars] + f"\n\n[... Excerpt truncated for length - first {max_chars} chars shown ...]"
+                    context_blocks.append(f"### DOCUMENT {idx}: {fname}\n{content}")
+
+            # 3. Format conversation history context for resolving follow-ups
+            history_context = ""
+            if conversation_history:
+                recent_turns = conversation_history[-4:]
+                history_lines = [f"{t.get('role', 'user').capitalize()}: {t.get('content', '')}" for t in recent_turns]
+                history_context = "### RECENT CONVERSATION TURNS (for reference resolution):\n" + "\n".join(history_lines) + "\n\n"
+
+            full_context = "\n\n".join(context_blocks)
+            if not full_context.strip():
+                logger.info(f"No document context available for query '{query}'; answering as general/domain query.")
+                general_answer = await self.answer_general_query(query, history_context)
+                return {
+                    "answer": general_answer.strip(),
+                    "evidence": [],
+                    "source_pages": [],
+                    "is_general_query": True
+                }
+
+            # 4. Construct user message prompt
+            user_message = f"""{history_context}### USER QUESTION:
+{query}
+
+### RELEVANT DOCUMENT EXCERPTS & EVIDENCE:
+{full_context}
+
+Please provide a structured, evidence-grounded answer addressing the question directly. Include page references [Page X] where applicable."""
+
+            # 5. Invoke LLM with complex document reasoning model (openai/gpt-oss-120b)
+            from app.core.model_config import TaskType
             response = await llm_service.invoke(
-                system_prompt=DOCUMENT_ANALYSIS_SYSTEM_PROMPT,
+                system_prompt=GROUNDED_SYSTEM_PROMPT,
                 user_message=user_message,
-                temperature=0.1
+                task_type=TaskType.DOCUMENT_REASONING
             )
-            
-            # Parse response
-            result = self._parse_response(response)
-            
-            logger.info("Document analysis completed")
-            return result
-            
+
+            # 6. Extract cited pages from response and context
+            cited_pages = self._extract_cited_pages(response, source_pages)
+
+            logger.info(f"Document analysis completed successfully (citations: {cited_pages})")
+
+            return {
+                "answer": response.strip(),
+                "evidence": [full_context[:1000]],
+                "source_pages": cited_pages
+            }
+
         except Exception as e:
-            logger.error(f"Document analysis failed: {e}")
+            logger.error(f"Document analysis agent failed: {e}", exc_info=True)
             raise
-    
-    def _format_documents(self, documents: List[Dict]) -> str:
-        """Format documents for LLM consumption."""
-        formatted = []
-        
-        for idx, doc in enumerate(documents, 1):
-            filename = doc.get("filename", f"Document {idx}")
-            content = doc.get("text_content", "")
-            
-            # Truncate very long documents
-            max_chars = 15000  # Per document limit
-            if len(content) > max_chars:
-                content = content[:max_chars] + f"\n\n[Document truncated - showing first {max_chars} characters]"
-            
-            formatted.append(f"""
-{'=' * 80}
-DOCUMENT {idx}: {filename}
-{'=' * 80}
 
-{content}
+    def _extract_cited_pages(self, answer_text: str, fallback_pages: Optional[List[int]]) -> List[int]:
+        """Extract cited page numbers from the generated response or context."""
+        found = set()
+        matches = re.findall(r"\[Page\s+(\d+)\]", answer_text, re.IGNORECASE)
+        for m in matches:
+            found.add(int(m))
 
-{'=' * 80}
-END OF DOCUMENT {idx}
-{'=' * 80}
-""")
-        
-        return "\n".join(formatted)
-    
-    def _parse_response(self, response: str) -> Dict:
-        """Parse analysis response."""
-        try:
-            response_text = response.strip()
-            
-            # Handle markdown code blocks
-            if "```json" in response_text:
-                json_start = response_text.find("```json") + 7
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-            elif "```" in response_text:
-                json_start = response_text.find("```") + 3
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-            
-            parsed = json.loads(response_text)
-            
-            return {
-                "executive_summary": parsed.get("executive_summary", ""),
-                "key_findings": parsed.get("key_findings", []),
-                "document_summaries": parsed.get("document_summaries", {}),
-                "cross_document_analysis": parsed.get("cross_document_analysis", ""),
-                "data_extracted": parsed.get("data_extracted", {}),
-                "contradictions": parsed.get("contradictions", []),
-                "answer": parsed.get("answer", ""),
-                "limitations": parsed.get("limitations", "")
-            }
-            
-        except json.JSONDecodeError:
-            # If JSON parsing fails, return response as answer
-            return {
-                "executive_summary": "",
-                "key_findings": [],
-                "document_summaries": {},
-                "cross_document_analysis": "",
-                "data_extracted": {},
-                "contradictions": [],
-                "answer": response,
-                "limitations": "Response format was not structured"
-            }
+        if not found and fallback_pages:
+            return fallback_pages[:4]
+
+        return sorted(list(found))
 
 
-# Global document analysis agent instance
 document_analysis_agent = DocumentAnalysisAgent()

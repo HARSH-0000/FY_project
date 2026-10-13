@@ -21,7 +21,7 @@ class TavilyProvider:
         self,
         query: str,
         max_results: Optional[int] = None,
-        search_depth: str = "advanced"
+        search_depth: str = "basic"
     ) -> List[Dict]:
         """
         Perform asynchronous web search using Tavily.
@@ -33,7 +33,7 @@ class TavilyProvider:
             )
 
         try:
-            logger.info(f"Tavily search: {query}")
+            logger.info(f"Tavily search: {query} (depth={search_depth})")
 
             max_results = (
                 max_results or settings.SEARCH_MAX_RESULTS
@@ -73,7 +73,8 @@ class TavilyProvider:
 
     async def search_with_answer(
         self,
-        query: str
+        query: str,
+        search_depth: str = "basic"
     ) -> Dict:
         """
         Perform asynchronous search and get Tavily's answer.
@@ -86,13 +87,13 @@ class TavilyProvider:
 
         try:
             logger.info(
-                f"Tavily search with answer: {query}"
+                f"Tavily search with answer: {query} (depth={search_depth})"
             )
 
             response = await self.client.search(
                 query=query,
                 max_results=settings.SEARCH_MAX_RESULTS,
-                search_depth="advanced",
+                search_depth=search_depth,
                 include_answer=True
             )
 

@@ -2,6 +2,7 @@ from app.services.llm import llm_service
 from app.schemas.research import RouteDecision
 from app.core import logger
 import json
+import re
 
 
 ROUTER_SYSTEM_PROMPT = """You are an intelligent query router for a FinTech research system.
@@ -81,11 +82,91 @@ class RouterAgent:
         try:
             logger.info(f"Routing query: {query}")
             
-            # Get LLM response
+            # Fast-path deterministic heuristics (0ms overhead)
+            q_clean = query.strip().lower()
+
+            # Check if query is explicitly a comparison / multi-entity inquiry
+            is_complex_pattern = bool(re.search(r'\b(compare|versus|vs\.?|across\s+\w+\s+and\s+\w+|difference between|differences between|impact of\s+.+\s+on)\b', q_clean))
+
+            if not is_complex_pattern:
+                # 1. Definitional / conceptual queries -> Tier 1 (SIMPLE)
+                is_simple_def = bool(re.search(
+                    r'^(what is|define|explain|meaning of)\s+(an?\s+)?(ebitda|npa|pe ratio|sip|mutual fund|stock|bond|equity|debt|ipo|derivative|future|option|dividend|market cap)\b',
+                    q_clean
+                )) and not bool(re.search(r'\b(current|today|today\'?s|latest|recent|202\d|fy2\d)\b', q_clean))
+
+                if is_simple_def:
+                    logger.info(f"Fast-path heuristic routed query '{query[:40]}' to SIMPLE (0ms)")
+                    return RouteDecision(
+                        route="SIMPLE",
+                        reason="Fast-path deterministic match for financial definition/concept",
+                        requires_current_information=False,
+                        requires_external_search=False,
+                        requires_multiple_sources=False,
+                        requires_comparison=False,
+                        requires_multi_step_reasoning=False
+                    )
+
+                # 2. Current factual rate / regulation / market queries -> Tier 2 (VERIFICATION)
+                is_verification_term = bool(re.search(
+                    r'\b(repo rate|reverse repo|bank rate|cash reserve ratio|\bcrr\b|\bslr\b|\bmsf rate\b|inflation rate|\bcpi\b|\bwpi\b|gdp growth|exchange rate|usd/?inr|inr/?usd|forex reserve|policy rate)\b',
+                    q_clean
+                ))
+                has_current_keyword = bool(re.search(
+                    r'\b(current|today|today\'?s|latest|recent|present)\b',
+                    q_clean
+                ))
+                is_factual_question = bool(re.search(
+                    r'^(what|how much|tell me|give me|check)\b.*\b(rate|price|pat|revenue|ebitda|margin|market cap|regulation|circular|policy)\b',
+                    q_clean
+                ))
+
+                if is_verification_term or (has_current_keyword and is_factual_question) or "rbi repo" in q_clean or "current rbi" in q_clean:
+                    logger.info(f"Fast-path heuristic routed query '{query[:40]}' to VERIFICATION (0ms)")
+                    return RouteDecision(
+                        route="VERIFICATION",
+                        reason="Fast-path deterministic match for current factual / search query",
+                        requires_current_information=True,
+                        requires_external_search=True,
+                        requires_multiple_sources=False,
+                        requires_comparison=False,
+                        requires_multi_step_reasoning=False
+                    )
+
+            # Expanded deterministic rules: prioritize evidence-rich routes
+            # Send more queries to VERIFICATION/COMPLEX for better evidence collection
+            needs_real_data = bool(re.search(r'\b(interest rate|loan|bank|emi|rate|price|cost|much|amount|calculate|calculation)\b', q_clean))
+            
+            if is_complex_pattern or "analysis of" in q_clean or "compare" in q_clean or "trends" in q_clean:
+                logger.info(f"Fast-path heuristic routed query '{query[:40]}' to COMPLEX (0ms)")
+                return RouteDecision(
+                    route="COMPLEX",
+                    reason="Fast-path deterministic match for financial comparison / complex analysis",
+                    requires_current_information=True,
+                    requires_external_search=True,
+                    requires_multiple_sources=True,
+                    requires_comparison=True,
+                    requires_multi_step_reasoning=True
+                )
+            elif needs_real_data and not is_simple_def:
+                # Route queries about rates, loans, etc. to VERIFICATION for evidence
+                logger.info(f"Fast-path heuristic routed query '{query[:40]}' to VERIFICATION (0ms) - needs real data")
+                return RouteDecision(
+                    route="VERIFICATION",
+                    reason="Query requires real-world data and evidence",
+                    requires_current_information=True,
+                    requires_external_search=True,
+                    requires_multiple_sources=False,
+                    requires_comparison=False,
+                    requires_multi_step_reasoning=False
+                )
+
+            # Fallback to LLM classifier if not deterministically matched
+            from app.core.model_config import TaskType
             response = await llm_service.invoke(
                 system_prompt=ROUTER_SYSTEM_PROMPT,
                 user_message=f"Classify this query:\n\n{query}",
-                temperature=0.0
+                task_type=TaskType.ROUTING
             )
             
             # Parse JSON response

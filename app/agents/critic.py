@@ -66,10 +66,11 @@ Evidence Used:
 
 Evaluate the quality and completeness of this answer."""
             
+            from app.core.model_config import TaskType
             response = await llm_service.invoke(
                 system_prompt=CRITIC_SYSTEM_PROMPT,
                 user_message=user_message,
-                temperature=0.2
+                task_type=TaskType.LIGHTWEIGHT
             )
             
             # Parse response
@@ -82,7 +83,7 @@ Evaluate the quality and completeness of this answer."""
             logger.error(f"Critic agent failed: {e}")
             # Return a permissive critique on failure
             return {
-                "quality_score": 0.7,
+                "quality_score": 0.6,
                 "is_acceptable": True,
                 "strengths": [],
                 "weaknesses": [],

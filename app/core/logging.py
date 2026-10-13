@@ -23,7 +23,12 @@ def setup_logging() -> logging.Logger:
     logger = logging.getLogger("irium")
     logger.setLevel(getattr(logging, settings.LOG_LEVEL))
     
-    # Create console handler
+    # Create console handler with utf-8 / replacement support for Windows
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(getattr(logging, settings.LOG_LEVEL))
     

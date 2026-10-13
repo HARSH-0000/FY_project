@@ -7,6 +7,74 @@ from typing import Dict, Optional
 class ResearchService:
     """Service for executing research workflows."""
     
+    def _validate_response_structure(self, result: Dict, query: str) -> None:
+        """
+        Validate the structure of the research response.
+        Logs warnings for malformed responses but doesn't block them.
+        
+        Args:
+            result: The research result dictionary
+            query: The original query for context in logs
+        """
+        try:
+            answer = result.get("answer")
+            
+            # Check if answer exists
+            if not answer:
+                logger.warning(f"[VALIDATION] Query '{query[:40]}...' - Missing 'answer' field in result")
+                return
+            
+            # Check if answer is properly structured
+            if isinstance(answer, dict):
+                sections = answer.get("sections", [])
+                
+                if not sections:
+                    logger.warning(f"[VALIDATION] Query '{query[:40]}...' - No sections in structured answer")
+                    return
+                
+                # Validate each section
+                for idx, section in enumerate(sections):
+                    section_type = section.get("type")
+                    
+                    if not section_type:
+                        logger.warning(f"[VALIDATION] Query '{query[:40]}...' - Section {idx} missing 'type' field")
+                    
+                    if section_type == "text":
+                        content = section.get("content", "")
+                        if not content or len(content.strip()) < 10:
+                            logger.warning(f"[VALIDATION] Query '{query[:40]}...' - Section {idx} (text) has insufficient content")
+                        
+                        # Check if content looks like raw JSON (nested)
+                        if content.strip().startswith("{") and "sections" in content:
+                            logger.error(f"[VALIDATION] Query '{query[:40]}...' - Section {idx} contains nested JSON! This will render incorrectly.")
+                    
+                    elif section_type == "table":
+                        columns = section.get("columns", [])
+                        rows = section.get("rows", [])
+                        
+                        if not columns:
+                            logger.warning(f"[VALIDATION] Query '{query[:40]}...' - Section {idx} (table) missing columns")
+                        
+                        if not rows:
+                            logger.warning(f"[VALIDATION] Query '{query[:40]}...' - Section {idx} (table) has no rows")
+                        
+                        # Validate row length matches column count
+                        for row_idx, row in enumerate(rows):
+                            if len(row) != len(columns):
+                                logger.error(f"[VALIDATION] Query '{query[:40]}...' - Section {idx} (table) row {row_idx} has {len(row)} values but {len(columns)} columns")
+                
+                logger.info(f"[VALIDATION] Query '{query[:40]}...' - Response structure validated: {len(sections)} sections")
+            
+            elif isinstance(answer, str):
+                # String answer - check if it's accidentally JSON
+                if answer.strip().startswith("{") and "sections" in answer:
+                    logger.error(f"[VALIDATION] Query '{query[:40]}...' - Answer is a JSON string instead of object! Parsing may be broken.")
+                else:
+                    logger.info(f"[VALIDATION] Query '{query[:40]}...' - Plain string answer ({len(answer)} chars)")
+            
+        except Exception as e:
+            logger.warning(f"[VALIDATION] Validation check failed for query '{query[:40]}...': {e}")
+    
     async def execute_research(
         self,
         query: str,
@@ -54,6 +122,12 @@ class ResearchService:
             memory_context = memory_service.build_memory_prompt_context(query, user_id=user_id, session_id=session_id)
             effective_query = f"{query}\n{memory_context}" if memory_context else query
 
+            # Initialize request budget and trace context
+            from app.core.budget import start_request_budget
+            budget = start_request_budget(
+                request_id=get_current_trace_id()
+            )
+
             # Initialize state
             initial_state: ResearchState = {
                 "query": effective_query,
@@ -82,6 +156,15 @@ class ResearchService:
             duration_ms = (time.time() - start_time) * 1000
             metrics.record_workflow(duration_ms)
             
+            # Log structured per-request observability summary
+            budget.outcome = "success" if not final_state.get("error") else "failed"
+            logger.info(
+                f"\n--- REQUEST OBSERVABILITY SUMMARY ---\n"
+                f"{budget.summary()}\n"
+                f"Latency: {round(duration_ms, 2)}ms\n"
+                f"------------------------------------"
+            )
+
             # Check for errors
             if final_state.get("error"):
                 logger.error(f"Research failed: {final_state['error']}")
@@ -101,12 +184,31 @@ class ResearchService:
             result["trace_id"] = get_current_trace_id()
             result["duration_ms"] = round(duration_ms, 2)
             
-            # Store in cache
+            # Validate JSON structure of the response
+            self._validate_response_structure(result, query)
+            
+            # Store in cache ONLY if result is valid and contains actual content
             if result and not result.get("error"):
-                tier = final_state.get("route", "DEFAULT")
-                ttl = cache_service.get_ttl_for_tier(tier)
-                await cache_service.set(cache_key, result, ttl_seconds=ttl)
-                logger.info(f"Cached research result for query: '{query[:40]}...' [ttl={ttl}s]")
+                # Validate result has meaningful content before caching
+                answer = result.get("answer")
+                has_content = False
+                
+                if isinstance(answer, dict) and "sections" in answer:
+                    # Check if any section has non-empty content
+                    for section in answer.get("sections", []):
+                        if section.get("content", "").strip():
+                            has_content = True
+                            break
+                elif isinstance(answer, str) and answer.strip():
+                    has_content = True
+                
+                if has_content:
+                    tier = final_state.get("route", "DEFAULT")
+                    ttl = cache_service.get_ttl_for_tier(tier)
+                    await cache_service.set(cache_key, result, ttl_seconds=ttl)
+                    logger.info(f"Cached research result for query: '{query[:40]}...' [ttl={ttl}s]")
+                else:
+                    logger.warning(f"Skipping cache for query '{query[:40]}...' - result has no content")
 
             # Record in persistent research history
             try:

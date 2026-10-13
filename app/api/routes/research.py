@@ -133,3 +133,78 @@ async def create_research(
         traceback.print_exc()
 
         raise
+
+
+@router.post("/debug")
+async def debug_research(request: ResearchRequest):
+    """
+    Debug endpoint that returns detailed execution information.
+    Useful for diagnosing "Insufficient information" issues.
+    """
+    try:
+        logger.info(f"DEBUG: Starting research for query: {request.query}")
+        
+        from app.core.budget import start_request_budget
+        start_request_budget()
+        
+        result = await research_service.execute_research(
+            request.query,
+            bypass_cache=request.bypass_cache,
+            user_id=None,
+            session_id=None
+        )
+        
+        # Return detailed debug information
+        return {
+            "query": request.query,
+            "route": result.get("route", "unknown"),
+            "answer_available": bool(result.get("answer")),
+            "answer_type": type(result.get("answer")).__name__ if result.get("answer") else "None",
+            "answer_preview": str(result.get("answer", ""))[:200],
+            "evidence_count": len(result.get("evidence", [])),
+            "sources_count": len(result.get("sources", [])),
+            "critique_score": result.get("critique", {}).get("quality_score"),
+            "execution_time_ms": result.get("duration_ms", 0),
+            "trace_id": result.get("trace_id", ""),
+            "error": result.get("error"),
+            "debug_details": {
+                "has_evidence": bool(result.get("evidence")),
+                "evidence_preview": [ev.get("claim", "")[:100] for ev in result.get("evidence", [])[:3]],
+                "source_urls": [s.get("url", "") for s in result.get("sources", [])[:3]]
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Debug research failed: {e}")
+        return {
+            "error": str(e),
+            "query": request.query,
+            "debug_error": True
+        }
+
+
+@router.post("/clear-cache")
+async def clear_research_cache():
+    """
+    Clear all cached research results.
+    Useful when bad responses get cached.
+    """
+    try:
+        from app.services.cache import cache_service
+        
+        # Clear all cache entries matching research pattern
+        cleared_count = await cache_service.clear("irium:research:*")
+        
+        logger.info(f"Cleared {cleared_count} cached research results")
+        
+        return {
+            "success": True,
+            "message": f"Cleared {cleared_count} cached research results",
+            "cleared_count": cleared_count
+        }
+    except Exception as e:
+        logger.error(f"Failed to clear cache: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }

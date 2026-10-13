@@ -143,10 +143,6 @@ class CacheService:
 
     async def get(self, key: str) -> Optional[Any]:
         """Retrieve value from cache with metrics recording and fallback."""
-        if not self.enabled:
-            metrics.record_cache_miss()
-            return None
-
         # Try Redis first if not using fallback
         if not self._using_fallback and self._redis_client:
             try:
@@ -176,9 +172,6 @@ class CacheService:
         ttl_seconds: Optional[int] = None
     ) -> bool:
         """Store value in cache with TTL and fallback."""
-        if not self.enabled:
-            return False
-
         effective_ttl = ttl_seconds or settings.CACHE_DEFAULT_TTL
 
         # Don't cache error results

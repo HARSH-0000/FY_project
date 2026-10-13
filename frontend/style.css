@@ -1509,3 +1509,437 @@ body {
     color: #34d399;
 }
 
+/* ==========================================================================
+   Document Intelligence & Attachment Styles
+   ========================================================================== */
+
+.input-error-banner {
+    max-width: 800px;
+    margin: 0 auto 10px auto;
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    border-radius: 8px;
+    padding: 8px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: #fca5a5;
+    font-size: 13.5px;
+    animation: fadeIn 0.2s ease-in-out;
+}
+
+.error-banner-content {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.error-icon {
+    width: 16px;
+    height: 16px;
+    stroke: #ef4444;
+    flex-shrink: 0;
+}
+
+.error-close-btn {
+    background: transparent;
+    border: none;
+    color: #fca5a5;
+    font-size: 20px;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0 4px;
+    transition: color 0.15s;
+}
+
+.error-close-btn:hover {
+    color: #ffffff;
+}
+
+.active-doc-banner {
+    max-width: 800px;
+    margin: 0 auto 10px auto;
+    background: rgba(16, 163, 127, 0.12);
+    border: 1px solid rgba(16, 163, 127, 0.35);
+    border-radius: 8px;
+    padding: 8px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 13px;
+    color: #6ee7b7;
+    animation: fadeIn 0.2s ease-in-out;
+}
+
+.active-doc-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.active-doc-icon {
+    font-size: 15px;
+}
+
+.active-doc-label {
+    color: #a7f3d0;
+    font-weight: 500;
+}
+
+.active-doc-name {
+    font-weight: 600;
+    color: #ffffff;
+    max-width: 350px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.active-doc-pages {
+    font-size: 11.5px;
+    color: #a7f3d0;
+    background: rgba(16, 163, 127, 0.25);
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.detach-doc-btn {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    color: #d1d5db;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    transition: all 0.15s;
+}
+
+.detach-doc-btn:hover {
+    background: rgba(239, 68, 68, 0.2);
+    border-color: rgba(239, 68, 68, 0.4);
+    color: #fca5a5;
+}
+
+.upload-progress-container {
+    max-width: 800px;
+    margin: 0 auto 10px auto;
+    animation: fadeIn 0.2s ease-in-out;
+}
+
+.progress-bar-wrapper {
+    width: 100%;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.progress-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #10a37f, #3b82f6);
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+.progress-status {
+    font-size: 11.5px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+    text-align: right;
+}
+
+.attachment-preview-tray {
+    max-width: 800px;
+    margin: 0 auto 10px auto;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    animation: fadeIn 0.2s ease-in-out;
+}
+
+.attachment-chip {
+    background: #232323;
+    border: 1px solid #3f3f46;
+    border-radius: 8px;
+    padding: 6px 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: #e4e4e7;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    transition: border-color 0.15s;
+}
+
+.attachment-chip:hover {
+    border-color: #52525b;
+}
+
+.attachment-chip .chip-icon {
+    font-size: 15px;
+}
+
+.attachment-chip .chip-name {
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+}
+
+.attachment-chip .chip-size {
+    font-size: 11.5px;
+    color: #a1a1aa;
+}
+
+.attachment-chip .chip-remove-btn {
+    background: transparent;
+    border: none;
+    color: #a1a1aa;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 2px;
+    margin-left: 2px;
+    border-radius: 4px;
+    transition: color 0.15s;
+}
+
+.attachment-chip .chip-remove-btn:hover {
+    color: #ef4444;
+}
+
+/* Citations & Evidence Pill in Chat Answers */
+.citation-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    background: rgba(59, 130, 246, 0.16);
+    border: 1px solid rgba(59, 130, 246, 0.35);
+    border-radius: 4px;
+    padding: 2px 7px;
+    font-size: 11.5px;
+    color: #93c5fd;
+    font-weight: 600;
+    margin: 0 2px;
+    cursor: default;
+    vertical-align: middle;
+}
+
+.citation-pill.image-ref {
+    background: rgba(168, 85, 247, 0.16);
+    border-color: rgba(168, 85, 247, 0.35);
+    color: #d8b4fe;
+}
+
+/* ==========================================================================
+   Markdown Content & GFM Styling (Tables, Headings, Lists, Code, Citations)
+   ========================================================================== */
+
+.markdown-content {
+    line-height: 1.7;
+    overflow-wrap: anywhere;
+    min-width: 0;
+    color: var(--text-primary, #ffffff);
+    font-size: 15px;
+}
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4,
+.markdown-content h5,
+.markdown-content h6 {
+    margin: 1.2em 0 0.5em;
+    line-height: 1.35;
+    font-weight: 700;
+    color: var(--text-primary, #ffffff);
+}
+
+.markdown-content h1:first-child,
+.markdown-content h2:first-child,
+.markdown-content h3:first-child {
+    margin-top: 0.2em;
+}
+
+.markdown-content h1 {
+    font-size: 1.6rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    padding-bottom: 0.4rem;
+}
+
+.markdown-content h2 {
+    font-size: 1.35rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    padding-bottom: 0.3rem;
+}
+
+.markdown-content h3 {
+    font-size: 1.15rem;
+}
+
+.markdown-content h4 {
+    font-size: 1.05rem;
+}
+
+.markdown-content p {
+    margin: 0.65em 0;
+    line-height: 1.7;
+}
+
+.markdown-content strong {
+    font-weight: 700;
+    color: #ffffff;
+}
+
+.markdown-content em {
+    font-style: italic;
+    color: #d1d5db;
+}
+
+.markdown-content del {
+    text-decoration: line-through;
+    color: #9ca3af;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+    padding-left: 1.5rem;
+    margin: 0.65em 0;
+}
+
+.markdown-content li {
+    margin: 0.3em 0;
+    line-height: 1.6;
+}
+
+.markdown-content li > p {
+    margin: 0.2em 0;
+}
+
+/* GFM Task Lists */
+.markdown-content ul.contains-task-list,
+.markdown-content ul:has(input[type="checkbox"]) {
+    list-style: none;
+    padding-left: 0.2rem;
+}
+
+.markdown-content input[type="checkbox"] {
+    margin-right: 0.5rem;
+    accent-color: #10a37f;
+}
+
+/* GFM Tables with horizontal scrolling */
+.markdown-table-wrapper {
+    width: 100%;
+    overflow-x: auto;
+    margin: 1.1rem 0;
+    border: 1px solid #3a3a3a;
+    border-radius: 8px;
+    background: #181818;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    -webkit-overflow-scrolling: touch;
+}
+
+.markdown-content table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    min-width: 480px;
+}
+
+.markdown-content th,
+.markdown-content td {
+    border: 1px solid #333333;
+    padding: 0.75rem 0.95rem;
+    text-align: left;
+    vertical-align: top;
+    line-height: 1.55;
+}
+
+.markdown-content th {
+    font-weight: 700;
+    background-color: #242424;
+    color: #10a37f;
+    border-bottom: 2px solid #444444;
+    white-space: nowrap;
+}
+
+.markdown-content tbody tr:nth-child(even) {
+    background-color: #1f1f1f;
+}
+
+.markdown-content tbody tr:nth-child(odd) {
+    background-color: #181818;
+}
+
+.markdown-content tbody tr:hover {
+    background-color: #282828;
+}
+
+/* Code Blocks & Inline Code */
+.markdown-content pre {
+    overflow-x: auto;
+    padding: 1rem;
+    border-radius: 8px;
+    background: #141414;
+    border: 1px solid #2e2e2e;
+    margin: 0.85em 0;
+    font-family: 'Fira Code', 'Cascadia Code', Consolas, Monaco, monospace;
+    font-size: 13.5px;
+    line-height: 1.5;
+}
+
+.markdown-content code {
+    font-family: 'Fira Code', 'Cascadia Code', Consolas, Monaco, monospace;
+    font-size: 13px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #38bdf8;
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    overflow-wrap: anywhere;
+}
+
+.markdown-content pre code {
+    background: transparent;
+    padding: 0;
+    color: #e2e8f0;
+    font-size: 13px;
+}
+
+/* Links */
+.markdown-content a {
+    color: #10a37f;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    font-weight: 500;
+    transition: color 0.15s ease;
+}
+
+.markdown-content a:hover {
+    color: #1dd1a1;
+}
+
+/* Blockquotes */
+.markdown-content blockquote {
+    border-left: 3px solid #10a37f;
+    margin: 0.85em 0;
+    padding: 0.5em 1.1em;
+    color: #a1a1aa;
+    background: rgba(16, 163, 127, 0.06);
+    border-radius: 0 6px 6px 0;
+}
+
+.markdown-content blockquote p {
+    margin: 0.25em 0;
+}
+
+/* Horizontal Rule */
+.markdown-content hr {
+    border: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    margin: 1.5em 0;
+}

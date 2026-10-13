@@ -1,0 +1,54 @@
+{
+  "timestamp": "2026-10-13T18:15:41.774708",
+  "summary": {
+    "answer_accuracy": "61.9%",
+    "citation_accuracy": "33.3%",
+    "claim_verification": "33.3%",
+    "hallucination_rate": "33.3%",
+    "originality_f1": "93.3%",
+    "compliance_safety": "100.0%",
+    "avg_latency_seconds": "5.54",
+    "avg_tokens": 338
+  },
+  "detailed_results": [
+    {
+      "query": "What is the current repo rate in India?",
+      "route": "VERIFICATION",
+      "answer_accuracy": 0.8571428571428571,
+      "citation_accuracy": 1.0,
+      "claim_verification": 1.0,
+      "hallucination_rate": 0.0,
+      "originality_f1": 0.8,
+      "compliance_safety": 1.0,
+      "latency": 4.589518785476685,
+      "tokens": 100.10000000000001,
+      "evidence_count": 3
+    },
+    {
+      "query": "Explain liquidity ratio",
+      "route": "SIMPLE",
+      "answer_accuracy": 1.0,
+      "citation_accuracy": 0.0,
+      "claim_verification": 0.0,
+      "hallucination_rate": 1.0,
+      "originality_f1": 1.0,
+      "compliance_safety": 1.0,
+      "latency": 6.856697082519531,
+      "tokens": 889.2,
+      "evidence_count": 0
+    },
+    {
+      "query": "What is Return on Equity (ROE)?",
+      "route": "SIMPLE",
+      "answer_accuracy": 0.0,
+      "citation_accuracy": 0.0,
+      "claim_verification": 0.0,
+      "hallucination_rate": 0.0,
+      "originality_f1": 1.0,
+      "compliance_safety": 1.0,
+      "latency": 5.184144973754883,
+      "tokens": 26.0,
+      "evidence_count": 0
+    }
+  ]
+}
