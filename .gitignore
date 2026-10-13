@@ -2,6 +2,7 @@
 .env
 .env.local
 .env.*.local
+.env.example
 
 
 # Python
@@ -41,6 +42,7 @@ myenv/
 *.swo
 *~
 
+
 # Data
 data/uploads/*
 !data/uploads/.gitkeep
@@ -57,3 +59,20 @@ Thumbs.db
 
 # Docker
 docker-compose.override.yml
+
+
+# Local documentation and deployment notes
+DEPLOYMENT.md
+DEPLOYMENT_SUMMARY.md
+EMPTY_RESPONSE_FIX.md
+HOW_TO_DEPLOY.txt
+INSUFFICIENT_INFO_ANALYSIS.md
+PERFORMANCE_OPTIMIZATIONS.md
+QUICKSTART.md
+STOP_BUTTON_FIX.md
+TEST_STOP_BUTTON.md
+
+docs/FIX_VERIFICATION.md
+docs/IMPROVEMENTS_SUMMARY.md
+docs/RESPONSE_CONTRACT.md
+docs/RESPONSE_QUALITY_IMPROVEMENTS.md
