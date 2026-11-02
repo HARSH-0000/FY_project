@@ -7,27 +7,32 @@ Optimized for Groq API Rate Limits:
 - Explicit differentiation between HTTP 429 and HTTP 400 (tool_use_failed)
 - Integration with RequestBudget to prevent runaway loops
 - Task-based model selection:
-    * openai/gpt-oss-120b: Complex synthesis and financial reasoning
-    * openai/gpt-oss-20b: Standard QA, summaries, extraction, and verification
-    * qwen/qwen3.8-27b: Alternative / fallback model
+    * openai/gpt-oss-120b: All tasks (unified model for consistency and quality)
     * Google Gemini: Ultimate fallback if configured
 - Client reuse and caching to avoid repeated client allocations
+- LangSmith integration for observability and tracing
 """
 
 import time
 import re
 import random
 import asyncio
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Any, Callable, Awaitable, AsyncGenerator
+from contextvars import ContextVar
 from langchain_groq import ChatGroq
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.schema import HumanMessage, SystemMessage
+from langchain_core.tracers.context import tracing_v2_enabled
+
+# Context variable for streaming tokens incrementally to the active SSE client
+stream_chunk_callback: ContextVar[Optional[Callable[[str], Awaitable[None]]]] = ContextVar("stream_chunk_callback", default=None)
 
 from app.core import settings, logger
 from app.core.model_config import ModelConfig, TaskType
 from app.core.budget import get_current_budget
 from app.services.rate_limiter import rate_limiter
 from app.core.observability import trace_span, metrics
+from app.core.langsmith_config import initialize_langsmith, get_langsmith_url
 
 
 class LLMService:
@@ -38,6 +43,7 @@ class LLMService:
         self.default_model = settings.LLM_MODEL
         self._client_cache: dict[str, Any] = {}
         self._model_cooldowns: dict[str, float] = {}
+        self._langsmith_enabled = initialize_langsmith()
 
     def _mark_model_cooldown(self, provider: str, model: str, duration_seconds: float = 45.0):
         """Mark a model as cooling down due to rate limits or quota exhaustion."""
@@ -123,7 +129,7 @@ class LLMService:
                 pass
         return default_backoff
 
-    async def invoke(
+    async def stream(
         self,
         system_prompt: str,
         user_message: str,
@@ -131,11 +137,136 @@ class LLMService:
         model: Optional[str] = None,
         task_type: Optional[TaskType] = None,
         max_tokens: Optional[int] = None
+    ) -> AsyncGenerator[str, None]:
+        """
+        Stream LLM response tokens chunk-by-chunk using astream().
+        """
+        if task_type:
+            task_params = ModelConfig.get_task_parameters(task_type)
+            if temperature is None:
+                temperature = task_params["temperature"]
+            if max_tokens is None:
+                max_tokens = task_params["max_tokens"]
+            if model is None:
+                model = ModelConfig.get_model_for_task(task_type)
+
+        temperature = temperature if temperature is not None else 0.0
+        primary_model = model or (
+            ModelConfig.get_model_for_task(TaskType.QA_STANDARD)
+            if self.provider == "groq"
+            else self.default_model
+        )
+
+        estimated_input_tokens = (len(system_prompt) + len(user_message)) // 4
+        budget = get_current_budget()
+
+        execution_chain: List[Tuple[str, str]] = []
+        if self._is_model_available(self.provider, primary_model):
+            execution_chain.append((self.provider, primary_model))
+
+        for fb_prov, fb_mod in ModelConfig.get_fallback_chain(primary_model):
+            if (fb_prov, fb_mod) not in execution_chain and self._is_model_available(fb_prov, fb_mod):
+                execution_chain.append((fb_prov, fb_mod))
+
+        if not execution_chain:
+            logger.error("No LLM models currently available for streaming.")
+            return
+
+        for provider, model_name in execution_chain:
+            if budget:
+                try:
+                    budget.record_llm_call(estimated_tokens=estimated_input_tokens)
+                except Exception as be:
+                    logger.warning(f"Streaming LLM call aborted by budget: {be}")
+                    return
+
+            wait_duration = await rate_limiter.acquire(estimated_tokens=estimated_input_tokens)
+            if budget and wait_duration > 0:
+                budget.record_rate_limit_wait(wait_duration)
+
+            start_time = time.time()
+            emitted_any = False
+            try:
+                logger.info(f"Streaming from {provider}/{model_name}")
+                llm = self.get_llm(
+                    temperature=temperature,
+                    model=model_name,
+                    provider=provider,
+                    max_tokens=max_tokens
+                )
+
+                messages = [
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=user_message)
+                ]
+
+                async for chunk in llm.astream(messages):
+                    chunk_content = chunk.content if hasattr(chunk, "content") else chunk
+                    if isinstance(chunk_content, list):
+                        chunk_text = "".join(
+                            p if isinstance(p, str) else (p.get("text", "") if isinstance(p, dict) else str(p))
+                            for p in chunk_content
+                        )
+                    elif isinstance(chunk_content, str):
+                        chunk_text = chunk_content
+                    else:
+                        chunk_text = str(chunk_content) if chunk_content is not None else ""
+
+                    if chunk_text:
+                        emitted_any = True
+                        yield chunk_text
+
+                duration_ms = (time.time() - start_time) * 1000
+                metrics.record_llm_call(provider, model_name, duration_ms, status="success")
+                return
+
+            except Exception as e:
+                duration_ms = (time.time() - start_time) * 1000
+                metrics.record_llm_call(provider, model_name, duration_ms, status="error")
+                logger.warning(f"Streaming error on {provider}/{model_name}: {e}")
+                if emitted_any:
+                    return
+                continue
+            finally:
+                rate_limiter.release()
+
+    async def invoke(
+        self,
+        system_prompt: str,
+        user_message: str,
+        temperature: Optional[float] = None,
+        model: Optional[str] = None,
+        task_type: Optional[TaskType] = None,
+        max_tokens: Optional[int] = None,
+        stream_to_user: bool = False
     ) -> str:
         """
         Invoke LLM with task-based selection, global rate limiting, budget enforcement,
         and bounded 429 backoff.
+        If stream_to_user is True and stream_chunk_callback is active, tokens stream live.
         """
+        callback = stream_chunk_callback.get()
+        if stream_to_user and callback is not None:
+            chunks = []
+            async for chunk in self.stream(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                temperature=temperature,
+                model=model,
+                task_type=task_type,
+                max_tokens=max_tokens
+            ):
+                chunks.append(chunk)
+                try:
+                    await callback(chunk)
+                except Exception as ce:
+                    logger.warning(f"Error in stream callback: {ce}")
+            
+            full_content = "".join(chunks)
+            budget = get_current_budget()
+            if budget:
+                budget.set_best_answer(full_content)
+            return full_content
         # Determine model and task parameters
         if task_type:
             task_params = ModelConfig.get_task_parameters(task_type)
@@ -209,8 +340,7 @@ class LLMService:
                         HumanMessage(content=user_message)
                     ]
 
-                    with trace_span(f"llm:{provider}/{model_name}"):
-                        response = await llm.ainvoke(messages)
+                    response = await llm.ainvoke(messages)
 
                     duration_ms = (time.time() - start_time) * 1000
                     metrics.record_llm_call(provider, model_name, duration_ms, status="success")
@@ -218,6 +348,7 @@ class LLMService:
                     content = response.content if hasattr(response, "content") else str(response)
                     if budget:
                         budget.set_best_answer(content)
+                    
                     return content
 
                 except Exception as e:

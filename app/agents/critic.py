@@ -53,31 +53,17 @@ class CriticAgent:
         try:
             logger.info(f"Critic agent evaluating answer for: {query}")
             
-            # Format evidence summary
-            evidence_summary = self._format_evidence_summary(evidence)
+            # Step 1: Deterministic validation first (0 tokens)
+            deterministic_result = self._deterministic_validation(query, answer, evidence)
             
-            user_message = f"""Query: {query}
-
-Answer:
-{answer}
-
-Evidence Used:
-{evidence_summary}
-
-Evaluate the quality and completeness of this answer."""
+            # If deterministic validation passes with high confidence, skip LLM
+            if deterministic_result["is_acceptable"] and deterministic_result["quality_score"] >= 0.7:
+                logger.info(f"Critic: Deterministic validation passed (0 tokens) - Score: {deterministic_result['quality_score']:.2f}")
+                return deterministic_result
             
-            from app.core.model_config import TaskType
-            response = await llm_service.invoke(
-                system_prompt=CRITIC_SYSTEM_PROMPT,
-                user_message=user_message,
-                task_type=TaskType.LIGHTWEIGHT
-            )
-            
-            # Parse response
-            critique = self._parse_response(response)
-            
-            logger.info(f"Critic evaluation: Score={critique.get('quality_score', 0):.2f}, Acceptable={critique.get('is_acceptable', False)}")
-            return critique
+            # Step 2: LLM evaluation for edge cases or low confidence
+            logger.info("Critic: Using LLM for detailed evaluation")
+            return await self._llm_critique(query, answer, evidence)
             
         except Exception as e:
             logger.error(f"Critic agent failed: {e}")
@@ -92,6 +78,126 @@ Evaluate the quality and completeness of this answer."""
                 "correction_needed": "",
                 "feedback": "Evaluation failed, accepting answer"
             }
+    
+    def _deterministic_validation(self, query: str, answer: str, evidence: list) -> Dict:
+        """
+        Perform deterministic quality checks without LLM.
+        Returns a critique dict with quality_score and is_acceptable.
+        """
+        strengths = []
+        weaknesses = []
+        missing_info = []
+        score = 0.8  # Start with high score, deduct for issues
+        
+        # Handle answer being a dict (structured response)
+        if isinstance(answer, dict):
+            import json
+            answer_str = json.dumps(answer, indent=2)
+        else:
+            answer_str = str(answer) if answer else ""
+        
+        # Check 1: Answer is not empty
+        if not answer_str or len(answer_str.strip()) < 20:
+            weaknesses.append("Answer is too short or empty")
+            score -= 0.4
+        else:
+            strengths.append("Answer provides substantive content")
+        
+        # Check 2: Evidence is present
+        if not evidence or len(evidence) == 0:
+            weaknesses.append("No evidence provided")
+            score -= 0.2
+        else:
+            strengths.append(f"{len(evidence)} evidence items provided")
+        
+        # Check 3: Sources are cited (check for URLs in answer)
+        import re
+        url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
+        urls_in_answer = re.findall(url_pattern, answer_str)
+        
+        if evidence and len(evidence) > 0:
+            if len(urls_in_answer) == 0:
+                weaknesses.append("No source URLs cited in answer")
+                score -= 0.1
+            else:
+                strengths.append(f"{len(urls_in_answer)} sources cited")
+        
+        # Check 4: Answer length is appropriate
+        answer_length = len(answer_str)
+        if answer_length > 100:
+            strengths.append("Answer provides detailed information")
+        elif answer_length < 50:
+            weaknesses.append("Answer may be too brief")
+            score -= 0.1
+        
+        # Check 5: Check for key query terms in answer (basic relevance)
+        query_terms = set(query.lower().split())
+        # Remove common words
+        common_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'compare', 'what', 'how', 'why', 'when', 'where'}
+        query_terms = query_terms - common_words
+        
+        answer_lower = answer_str.lower()
+        relevant_terms = sum(1 for term in query_terms if term in answer_lower)
+        
+        if relevant_terms >= len(query_terms) * 0.5:
+            strengths.append("Answer addresses key query terms")
+        else:
+            weaknesses.append("Answer may not fully address query")
+            score -= 0.15
+        
+        # Determine if acceptable
+        is_acceptable = score >= 0.6
+        
+        feedback = f"Deterministic validation: {len(strengths)} strengths, {len(weaknesses)} weaknesses"
+        
+        return {
+            "quality_score": max(0.0, min(1.0, score)),
+            "is_acceptable": is_acceptable,
+            "strengths": strengths,
+            "weaknesses": weaknesses,
+            "missing_information": missing_info,
+            "needs_correction": not is_acceptable,
+            "correction_needed": "; ".join(weaknesses) if weaknesses else "",
+            "feedback": feedback
+        }
+    
+    async def _llm_critique(self, query: str, answer: str, evidence: list) -> Dict:
+        """Perform LLM-based critique when deterministic validation is insufficient."""
+        logger.info("Critic: Performing LLM evaluation")
+        
+        # Handle answer being a dict (structured response)
+        if isinstance(answer, dict):
+            # Convert structured answer to string for evaluation
+            import json
+            answer_str = json.dumps(answer, indent=2)
+        else:
+            answer_str = str(answer)
+        
+        # Format evidence summary
+        evidence_summary = self._format_evidence_summary(evidence)
+        
+        user_message = f"""Query: {query}
+
+Answer:
+{answer_str}
+
+Evidence Used:
+{evidence_summary}
+
+Evaluate the quality and completeness of this answer."""
+        
+        from app.core.model_config import TaskType
+        response = await llm_service.invoke(
+            system_prompt=CRITIC_SYSTEM_PROMPT,
+            user_message=user_message,
+            task_type=TaskType.LIGHTWEIGHT
+        )
+        
+        # Parse response
+        critique = self._parse_response(response)
+        
+        logger.info(f"Critic LLM evaluation: Score={critique.get('quality_score', 0):.2f}, Acceptable={critique.get('is_acceptable', False)}")
+        return critique
     
     def _format_evidence_summary(self, evidence: list) -> str:
         """Format evidence summary for critic."""

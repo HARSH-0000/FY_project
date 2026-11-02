@@ -5,72 +5,33 @@ from typing import List, Dict
 import json
 
 
-VERIFICATION_SYSTEM_PROMPT = """You are a FinTech research agent that verifies factual information using web search results.
+VERIFICATION_SYSTEM_PROMPT = """You are a senior FinTech research agent that verifies factual information using web search results.
 
 Your task is to:
 1. Analyze the search results provided
-2. Extract verified facts and data
-3. Create evidence-backed claims
-4. Generate a clear, accurate answer
+2. Extract verified facts, numbers, dates, and data
+3. Generate a clear, accurate, and authoritative answer
 
 TEMPORAL VALIDATION REQUIREMENTS:
 - ALL financial data (interest rates, prices, revenues, profits, ratios, metrics) MUST include the reporting period, year, quarter, or date.
 - Format examples: "8.75% home loan rate (September 2026)", "₹75,000 crore market cap (Q2 FY2026)", "$500M revenue (FY2025)"
 - If the reporting period is not available in the source, mark it as "[Period Not Verified]" or omit the specific figure.
-- NEVER present financial data without temporal context.
 - For comparison tables, ALWAYS include a "Year / Period" column.
 
-CRITICAL: You MUST respond in this JSON format:
-{
-  "sections": [
-    {
-      "type": "text",
-      "title": "Section Title",
-      "content": "Plain text explanation with facts and numbers"
-    },
-    {
-      "type": "table",
-      "title": "Table Title",
-      "columns": ["Column 1", "Column 2"],
-      "rows": [
-        ["Value 1", "Value 2"],
-        ["Value 3", "Value 4"]
-      ]
-    }
-  ],
-  "evidence": [
-    {
-      "claim": "Specific fact or data point",
-      "source_title": "Title of the source",
-      "source_url": "URL of the source",
-      "source_name": "Name/organization of source",
-      "evidence_text": "Relevant excerpt from the source",
-      "confidence": 0.9
-    }
-  ],
-  "sources": [
-    {
-      "title": "Source title",
-      "url": "Source URL",
-      "name": "Source name"
-    }
-  ]
-}
-
-Rules for sections:
-- Never generate Markdown (no #, **, *, |, tables, or code fences)
-- Use text sections for normal explanations
-- Use table sections for data comparisons
-- Every table row must have exactly the same number of values as columns
-- Preserve important numbers, dates, entities, and citations
-
-Guidelines:
-- Only use information explicitly found in the search results
-- Cite sources for every factual claim
-- Prefer authoritative sources (RBI, SEBI, official reports)
-- Include specific numbers, dates, and figures
-- Be precise and factual
-- If information is not found, say so"""
+FORMATTING & OUTPUT RULES:
+- Format your response directly in clean, professional Markdown for immediate reading.
+- Every section and subsection title MUST start with `### ` (e.g. `### Verified Fact`, `### 1.1 Detailed Breakdown`, `### Historical Context`, `### Key Takeaways`). NEVER output raw numbers as headings without `###`.
+- For mathematical formulas and calculations:
+  * Present mathematical formulas using clean standard display syntax:
+    $$\\text{New Import Bill} = \\text{Volume} \\times \\text{Price}_{\\text{new}}$$
+    or clean readable arithmetic lines:
+    `New Import Bill = 1.825 bn bbl × $92 = $168 bn ≈ ₹13.9 Trillion`
+  * Never output bare unstyled brackets like `[` and `]` on isolated lines without math formatting.
+- For tables:
+  * Use formatted Markdown tables (`| Entity / Metric | Value | Period / Date | Macro Implication |`).
+  * TABLE COMPLETENESS MANDATE: Every table row MUST have meaningful, complete content in EVERY column. NEVER leave any column or cell blank or empty.
+- Use bullet points and bold text for key metrics, figures, and dates.
+- Do NOT wrap your output in raw JSON or code fences. Write directly in Markdown."""
 
 
 class VerificationAgent:
@@ -80,16 +41,30 @@ class VerificationAgent:
         """Verify query using web search, fast-pathing through Tavily's direct answer when available."""
         try:
             logger.info(f"Verification agent processing: {query}")
+
+            from app.agents.router import router_agent
+            from app.agents.simple import simple_agent
+
+            # Safeguard: if a mathematical / calculation query reached verification agent,
+            # do not perform web search or attach external sources / "Verified Fact & Finding" title;
+            # delegate directly to simple agent.
+            if router_agent._is_math_or_calculation_query(query.strip().lower()):
+                logger.info(f"Verification agent safeguard: query '{query[:40]}' is mathematical/calculation; delegating to simple agent")
+                return await simple_agent.answer(query)
             
             # Step 1: Search with Tavily instant answer
             search_data = await search_service.search_with_context(query, search_depth="basic")
             search_results = search_data.get("results", [])
             tavily_answer = (search_data.get("answer") or "").strip()
 
-            # Fast-path: If Tavily returned a direct authoritative answer, construct response immediately
+            from app.services.visualization import should_generate_chart
+            requires_chart = should_generate_chart(query)
+
+            # Fast-path: If Tavily returned a direct authoritative answer AND no visualization was requested, construct response immediately
             uninformative_prefixes = ("i am sorry", "i could not find", "i cannot find", "there is no information")
             if (
-                tavily_answer
+                not requires_chart
+                and tavily_answer
                 and len(tavily_answer) > 20
                 and not any(tavily_answer.lower().startswith(p) for p in uninformative_prefixes)
             ):
@@ -144,29 +119,53 @@ class VerificationAgent:
                     "route": "VERIFICATION"
                 }
             
-            # Step 2: Format search results for LLM fallback
+            # Step 2: Format search results for LLM
             search_context = self._format_search_results(search_results)
             
             # Step 3: Get LLM to extract and verify information
+            if requires_chart:
+                chart_hint = (
+                    "\nCRITICAL REQUIREMENT: The user explicitly requested a chart or graph visualization.\n"
+                    "You MUST include a structured 'table' section in 'sections' with columns like ['Date', 'Closing Price (INR)'] "
+                    "or ['Period', 'Metric'] containing all available historical numerical data points from the search results "
+                    "(e.g. daily/monthly/quarterly stock prices, highs, lows, or metrics) so a chart can be rendered. Do not omit the table."
+                )
+            else:
+                chart_hint = ""
+
             user_message = f"""Query: {query}
+{f"Summary Context: {tavily_answer}" if tavily_answer else ""}
 
 Search Results:
 {search_context}
-
+{chart_hint}
 Analyze these search results and provide verified information with evidence."""
             
             from app.core.model_config import TaskType
             response = await llm_service.invoke(
                 system_prompt=VERIFICATION_SYSTEM_PROMPT,
                 user_message=user_message,
-                task_type=TaskType.VERIFICATION
+                task_type=TaskType.VERIFICATION,
+                stream_to_user=True
             )
             
             # Step 4: Parse response
             result = self._parse_response(response)
             result["route"] = "VERIFICATION"
+
+            # Attach authoritative sources from search results if not already present
+            if not result.get("sources") and search_results:
+                result["sources"] = [
+                    {
+                        "title": r.get("title") or r.get("url", "Web Source"),
+                        "url": r.get("url", "#"),
+                        "name": r.get("source", "Web")
+                    }
+                    for r in search_results[:5]
+                    if r.get("url")
+                ]
             
-            logger.info("Verification agent completed successfully via LLM fallback")
+            logger.info("Verification agent completed successfully")
             return result
             
         except Exception as e:
@@ -190,52 +189,40 @@ Priority Score: {result.get('priority_score', 0.0)}
         return "\n".join(formatted)
     
     def _parse_response(self, response: str) -> Dict:
-        """Parse LLM response into structured format."""
-        try:
-            # Try to extract JSON from response
-            response_text = response.strip()
-            
-            # Handle markdown code blocks
+        """Parse LLM response into structured format with resilient JSON repair and fallback recovery."""
+        response_text = response.strip()
+        
+        # If response is structured JSON
+        if response_text.startswith('{') or '"sections"' in response_text:
             if "```json" in response_text:
                 json_start = response_text.find("```json") + 7
                 json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
+                response_text_clean = response_text[json_start:json_end if json_end != -1 else None].strip()
             elif "```" in response_text:
                 json_start = response_text.find("```") + 3
                 json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-            
-            # Parse JSON
-            parsed = json.loads(response_text)
-            
-            # Extract sections, evidence, and sources
-            sections = parsed.get("sections", [])
-            evidence = parsed.get("evidence", [])
-            sources = parsed.get("sources", [])
-            
-            # Return structured format with sections directly in answer
-            return {
-                "answer": {
-                    "sections": sections
-                },
-                "sources": sources,
-                "evidence": evidence
-            }
-            
-        except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse as JSON: {e}")
-            # Return response wrapped in structured format
-            return {
-                "answer": {
-                    "sections": [{
-                        "type": "text",
-                        "title": "Answer",
-                        "content": response
-                    }]
-                },
-                "evidence": [],
-                "sources": []
-            }
+                response_text_clean = response_text[json_start:json_end if json_end != -1 else None].strip()
+            else:
+                response_text_clean = response_text
+
+            # Try parsing JSON
+            try:
+                parsed = json.loads(response_text_clean, strict=False)
+                if parsed.get("sections"):
+                    return {
+                        "answer": {"sections": parsed.get("sections", [])},
+                        "sources": parsed.get("sources", []),
+                        "evidence": parsed.get("evidence", [])
+                    }
+            except Exception:
+                pass
+
+        # Return clean markdown text directly
+        return {
+            "answer": response_text,
+            "evidence": [],
+            "sources": []
+        }
 
 
 # Global verification agent instance

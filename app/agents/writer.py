@@ -11,87 +11,51 @@ class WriterAgent:
     def _get_system_prompt(self) -> str:
         now = datetime.now()
         year = now.year if now.year >= 2026 else 2026
-        date_str = now.strftime("%B %Y")
         
-        return f"""You are a comprehensive research writer that creates detailed, evidence-based answers.
+        return f"""You are a senior FinTech research analyst synthesizing evidence-based financial intelligence. Current year: {year}.
 
-CURRENT TEMPORAL CONTEXT:
-- Today's date is {date_str} (Current Year: {year}).
-- When synthesizing and presenting comparisons or figures, prioritize the latest data ({year} / current fiscal cycle).
-- REQUIREMENT: ALL financial figures, rates, metrics, and data points MUST be explicitly labeled with their exact reporting period, year, or fiscal period (e.g. FY{year}, Q3 2026, 2026 budget, September 2026).
-- NEVER present financial data without its temporal context. If the year/period is unknown, state "Year Not Verified" or omit the data point.
-- For comparison tables, ALWAYS include a "Year / Period" column showing the reporting period for each metric.
-- When data spans multiple years, show the trend with each year labeled (e.g. "2024: $100M, 2025: $120M, 2026: $145M").
-
-CRITICAL: You MUST respond in this JSON format:
-{{
-  "sections": [
-    {{
-      "type": "text",
-      "title": "Section Title",
-      "content": "Detailed, comprehensive explanation with multiple paragraphs providing thorough analysis"
-    }},
-    {{
-      "type": "table",
-      "title": "Table Title",
-      "columns": ["Metric", "Country/Entity 1", "Country/Entity 2", "Year / Period"],
-      "rows": [
-        ["Total Defence Budget", "$86 Billion (₹7.0 Lakh Cr)", "$831.5 Billion", "{year}"],
-        ["% of GDP", "1.9%", "3.1%", "{year}"]
-      ]
-    }}
-  ]
-}}
-
-COMPREHENSIVE WRITING GUIDELINES:
-RESPONSE LENGTH AND DETAIL:
-
-- Match the response length to the complexity of the user's question.
-- Simple factual questions: provide a concise answer.
-- Explanatory questions: provide a clear explanation with relevant examples.
-- Comparison questions: use a table when it improves clarity.
-- Complex research requests: generate a detailed, multi-section report.
-- Respect any response-length preference explicitly provided by the user.
-- Do not repeat information across sections.
-- Include only evidence relevant to the query.
-- Never invent facts, financial figures, dates, or citations to make the response appear comprehensive.
-
-Rules:
-- Never generate Markdown (no #, **, *, |, tables, or code fences)
-- Use text sections for comprehensive explanations and analysis
-- Use table sections for detailed comparisons, financial data, metrics
-- Every table row must have exactly the same number of values as columns
-- Preserve all important numbers, dates, entities, evidence, and citations
-- Write in a professional, authoritative tone suitable for financial analysis
-- Structure the answer with logical flow from overview to detailed analysis"""
+FORMATTING & QUALITY RULES:
+1. Format your answer directly in clean, professional Markdown for immediate reading.
+2. ALL financial figures MUST include reporting period and use Indian Rupees (₹) by default: "Revenue: ₹500 Cr (FY{year})" or "Revenue: $50B (FY{year})" if USD.
+3. Every section and subsection title MUST start with `### ` (e.g., `### 1.1 Overview`, `### 1.2 Impact on Oil Import Bill`, `### 1.3 Ripple Effects`, `### Key Strategic Takeaways`). NEVER output raw numbers as headings without `###`.
+4. Mathematical Formulas & Calculations:
+   - Present mathematical formulas using clean standard display syntax:
+     $$\\text{{New Import Bill}} = \\text{{Volume}} \\times \\text{{Price}}_{{\\text{{new}}}}$$
+     or clean readable arithmetic lines:
+     `New Import Bill = 1.825 bn bbl × $92 = $168 bn ≈ ₹13.9 Trillion`
+   - Never output bare unstyled brackets like `[` and `]` on isolated lines without math formatting.
+   - Always define variables, show substituted numbers, and clearly state the final result.
+5. Structured Tables:
+   - Use formatted Markdown tables (`| Takeaway / Metric | Macro & Financial Implication | Period / Scope |`).
+   - TABLE COMPLETENESS MANDATE: Every table row MUST have meaningful, complete content in EVERY column. NEVER leave any column or cell blank or empty. If you list 5 takeaways, each of the 5 rows MUST have a corresponding analytical implication.
+6. Use bullet points and bold text for key metrics, takeaways, and numbers.
+7. Reference evidence claims without bracketed citation numbers (like [1], [2]) - sources are displayed separately.
+8. State limitations when data is unavailable. Do NOT invent figures or dates.
+9. Do NOT output raw JSON or code fences. Write directly in polished Markdown."""
 
     async def write(self, query: str, evidence: List[Dict], findings_summary: str = "") -> Dict:
         """Write final answer based on evidence."""
         try:
             logger.info(f"Writer agent creating answer for: {query}")
             
+            # If no evidence, generate response from LLM's finance domain knowledge
             if not evidence:
                 logger.warning(f"Writer agent received empty evidence for query: {query}")
-                logger.info(f"Findings summary was: {findings_summary}")
-                return {
-                    "answer": "Insufficient information found to answer this query. Please try rephrasing your question or check if the search terms are specific enough.",
-                    "key_points": [],
-                    "data_summary": {},
-                    "debug_info": {
-                        "evidence_count": 0,
-                        "findings_summary_available": bool(findings_summary)
-                    }
-                }
+                logger.info(f"Generating response from LLM finance knowledge (no external evidence)")
+                return await self._generate_from_knowledge(query)
             
             # Format evidence for LLM
             evidence_context = self._format_evidence(evidence)
             
+            from app.services.visualization import should_generate_chart
+            chart_hint = "\nIMPORTANT: The user explicitly requested a chart/graph visualization. You MUST include a structured 'table' section with the exact numerical data points (periods/entities and numbers) so it can be plotted." if should_generate_chart(query) else ""
+
             user_message = f"""Query: {query}
 
 Evidence and Findings:
 {evidence_context}
 
-{f"Research Summary: {findings_summary}" if findings_summary else ""}
+{f"Research Summary: {findings_summary}" if findings_summary else ""}{chart_hint}
 
 Create a comprehensive answer based on this evidence."""
             
@@ -99,7 +63,8 @@ Create a comprehensive answer based on this evidence."""
             response = await llm_service.invoke(
                 system_prompt=self._get_system_prompt(),
                 user_message=user_message,
-                task_type=TaskType.SYNTHESIS_COMPLEX
+                task_type=TaskType.SYNTHESIS_COMPLEX,
+                stream_to_user=True
             )
             
             # Parse response
@@ -121,10 +86,10 @@ Create a comprehensive answer based on this evidence."""
             raise
     
     def _format_evidence(self, evidence: List[Dict]) -> str:
-        """Format evidence for LLM with focused, high-quality details."""
+        """Format evidence concisely for LLM."""
         formatted = []
         
-        # Limit to top 7 most relevant evidence items for focused analysis
+        # Top 7 most relevant evidence items
         sorted_evidence = sorted(
             evidence,
             key=lambda x: x.get('confidence', 0.0),
@@ -133,20 +98,52 @@ Create a comprehensive answer based on this evidence."""
         
         for idx, item in enumerate(sorted_evidence, 1):
             details = item.get('evidence_text', 'N/A')
-            # Keep detail limit at 800 characters for rich context
-            if len(details) > 800:
-                details = details[:800] + "..."
+            # Reduced to 400 characters for efficient token usage
+            if len(details) > 400:
+                details = details[:400] + "..."
             
-            formatted.append(f"""
-Evidence {idx}:
-Claim: {item.get('claim', 'N/A')}
-Source: {item.get('source_title', 'N/A')} ({item.get('source_url', 'N/A')})
-Organization: {item.get('source_name', 'N/A')}
-Details: {details}
-Confidence: {item.get('confidence', 0.0):.2f}
----""")
+            formatted.append(f"[{idx}] {item.get('claim', 'N/A')}\nSource: {item.get('source_title', 'N/A')}\nURL: {item.get('source_url', 'N/A')}\nDetails: {details}\n")
         
         return "\n".join(formatted)
+    
+    async def _generate_from_knowledge(self, query: str) -> Dict:
+        """
+        Generate finance-related response from LLM's built-in knowledge when no evidence is available.
+        This ensures users get helpful answers even when external search yields no results.
+        """
+        logger.info("Generating response from LLM finance domain knowledge")
+        
+        knowledge_prompt = f"""User query: "{query}"
+
+No external evidence found. Provide a helpful response based on financial knowledge.
+
+Guidelines:
+1. Focus on fundamental concepts and principles
+2. If query asks for current data, acknowledge you cannot provide real-time information
+3. Suggest what type of information to look for
+4. Stay within finance/business domain"""
+
+        from app.core.model_config import TaskType
+        response = await llm_service.invoke(
+            system_prompt=self._get_system_prompt(),
+            user_message=knowledge_prompt,
+            task_type=TaskType.SYNTHESIS_COMPLEX,
+            stream_to_user=True
+        )
+        
+        # Parse response
+        result = self._parse_response(response)
+        
+        # Add disclaimer
+        if isinstance(result.get("answer"), dict) and "sections" in result["answer"]:
+            result["answer"]["sections"].append({
+                "type": "text",
+                "title": "Note",
+                "content": "Based on general financial knowledge. For current data, refer to official sources."
+            })
+        
+        logger.info("Generated knowledge-based response")
+        return result
     
     def _generate_fallback_from_evidence(self, query: str, evidence: List[Dict]) -> Dict:
         """
@@ -193,40 +190,23 @@ Confidence: {item.get('confidence', 0.0):.2f}
     
     def _parse_response(self, response: str) -> Dict:
         """Parse writer response."""
-        try:
-            response_text = response.strip()
-            
-            if "```json" in response_text:
-                json_start = response_text.find("```json") + 7
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-            elif "```" in response_text:
-                json_start = response_text.find("```") + 3
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-            
-            parsed = json.loads(response_text)
-            
-            # Return structured format
-            return {
-                "answer": parsed,  # Return the structured JSON directly
-                "key_points": [],
-                "data_summary": {}
-            }
-            
-        except json.JSONDecodeError:
-            # If JSON parsing fails, wrap as plain text section
-            return {
-                "answer": {
-                    "sections": [{
-                        "type": "text",
-                        "title": "Answer",
-                        "content": response
-                    }]
-                },
-                "key_points": [],
-                "data_summary": {}
-            }
+        response_text = response.strip()
+        if response_text.startswith('{') and '"sections"' in response_text:
+            try:
+                parsed = json.loads(response_text)
+                return {
+                    "answer": parsed,
+                    "key_points": [],
+                    "data_summary": {}
+                }
+            except Exception:
+                pass
+        
+        return {
+            "answer": response_text,
+            "key_points": [],
+            "data_summary": {}
+        }
 
 
 # Global writer agent instance

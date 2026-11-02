@@ -13,46 +13,26 @@ class ReaderAgent:
         now = datetime.now()
         year = now.year if now.year >= 2026 else 2026
         
-        return f"""You are a comprehensive research reader agent that extracts detailed information from search results.
+        return f"""Extract key financial data from search results. Current year: {year}.
 
-CURRENT TEMPORAL CONTEXT:
-- The current year is {year}.
-- REQUIREMENT: EVERY financial figure, rate, metric, or data point you extract MUST include its reporting period, year, quarter, or date.
-- Format examples: "8.5% interest rate (October 2026)", "₹50,000 crore revenue (FY2026)", "$1.2B net profit (Q3 2026)"
-- If you cannot determine the exact reporting period from the source, mark it as "[Period Not Verified]" but still include the finding.
-- Prioritize extracting the latest figures and data points ({year} or latest available reporting period).
-- DO NOT extract financial data without temporal context unless absolutely necessary.
+RULES:
+1. Every financial figure MUST include its reporting period: "Revenue: $50B (FY{year})", "Market cap: $800B (Oct {year})"
+2. Extract 3-5 key facts per task (not 8+)
+3. Focus on numbers, dates, metrics relevant to the research task
+4. Include source URL for each fact
 
-Your task is to:
-1. Read and analyze search results thoroughly
-2. Extract 5 to 8 key verifiable data points relevant to the task
-3. Identify important facts, figures, financial metrics, and contextual information
-4. Note comprehensive source information for each piece of data
-5. Provide detailed context and background for each finding
-
-Guidelines:
-- Focus on extracting comprehensive, verifiable information
-- Extract specific numbers, dates, metrics, and contextual details
-- Include background information and explanations
-- Prefer authoritative sources and official reports
-- Extract both quantitative data and qualitative insights
-- Provide detailed summaries with rich context
-
-Output Format:
-Provide a JSON object with extensive findings:
+Output JSON:
 {{
     "findings": [
         {{
-            "information": "Detailed fact or data point with comprehensive context, year/date, and implications",
-            "source_title": "Complete title of source document",
-            "source_url": "Full URL of source",
-            "source_name": "Official name of source organization",
+            "information": "Concise fact with year/period and metric",
+            "source_url": "URL",
+            "source_title": "Title",
             "confidence": 0.9,
-            "context": "Comprehensive context explaining the significance, methodology, and broader implications of this finding"
+            "context": "Brief explanation (1-2 sentences)"
         }}
     ],
-    "summary": "Comprehensive 2-3 sentence summary covering key findings and their significance",
-    "data_quality": "reliable"
+    "summary": "1-sentence summary of key findings"
 }}"""
 
     async def read(self, task: Dict, search_results: List[Dict]) -> Dict:
@@ -89,7 +69,8 @@ Extract relevant information for this task."""
             # Parse response with search_results fallback
             result = self._parse_response(response, search_results=search_results, task=task)
             
-            logger.info(f"Reader found {len(result.get('findings', []))} findings")
+            num_findings = len(result.get('findings', []))
+            logger.info(f"Reader extracted {num_findings} findings")
             return result
             
         except Exception as e:
@@ -103,44 +84,39 @@ Extract relevant information for this task."""
             }
     
     def _format_search_results(self, results: List[Dict]) -> str:
-        """Format search results for comprehensive LLM analysis."""
+        """Format search results concisely for LLM analysis."""
         formatted = []
         
-        # Increase to top 5 search results for more comprehensive coverage
-        for idx, result in enumerate(results[:5], 1):
+        # Use top 3 search results to reduce token usage
+        for idx, result in enumerate(results[:3], 1):
             raw_content = result.get('content', 'N/A')
-            # Increase content limit to 1000 characters for richer context
-            if len(raw_content) > 1000:
-                raw_content = raw_content[:1000] + "..."
+            # Reduced to 400 characters for efficient token usage
+            if len(raw_content) > 400:
+                raw_content = raw_content[:400] + "..."
 
-            formatted.append(f"""
-Result {idx}:
-Title: {result.get('title', 'N/A')}
-URL: {result.get('url', 'N/A')}
-Content: {raw_content}
----""")
+            formatted.append(f"[{idx}] {result.get('title', 'N/A')}\n{raw_content}\nURL: {result.get('url', 'N/A')}\n")
         
         return "\n".join(formatted)
 
     def _extract_from_search_results(self, search_results: Optional[List[Dict]], task: Optional[Dict] = None) -> List[Dict]:
-        """Convert raw search results directly into comprehensive structured findings."""
+        """Convert raw search results directly into structured findings."""
         findings = []
         if not search_results:
             return findings
 
-        # Increase to top 5 results for better coverage
-        for idx, r in enumerate(search_results[:5], 1):
+        # Use top 3 results for efficiency
+        for idx, r in enumerate(search_results[:3], 1):
             content = (r.get("content") or "").strip()
             title = r.get("title") or (task.get("description") if task else f"Source {idx}")
             url = r.get("url") or ""
             if content:
                 findings.append({
-                    "information": content[:500],  # Increase content limit
+                    "information": content[:300],  # Reduced from 500 to 300
                     "source_title": title,
                     "source_url": url,
-                    "source_name": title[:60],  # Longer source names
+                    "source_name": title[:40],  # Reduced from 60 to 40
                     "confidence": 0.85,
-                    "context": f"Comprehensive finding relevant to {task.get('description', 'query') if task else 'search'} with detailed context from {title}"
+                    "context": f"Finding from {title[:30]}"
                 })
         return findings
     

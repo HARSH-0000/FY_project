@@ -49,7 +49,7 @@ class SearchService:
 
             start_time = time.time()
             
-            with trace_span("retrieval:search", {"results_requested": max_results}) as span:
+            with trace_span("retrieval:search", results_requested=max_results) as span:
                 # Get search results from Tavily
                 results = await self.tavily.search(
                     query=query,
@@ -107,7 +107,7 @@ class SearchService:
                 return cached_result
 
             start_time = time.time()
-            with trace_span("retrieval:search_with_context", {"query": query[:50]}) as span:
+            with trace_span("retrieval:search_with_context", query=query[:50]) as span:
                 result = await self.tavily.search_with_answer(query, search_depth=search_depth)
 
             duration_ms = (time.time() - start_time) * 1000

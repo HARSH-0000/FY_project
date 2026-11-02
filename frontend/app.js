@@ -70,7 +70,6 @@ const stopBtn = document.getElementById('stopBtn');
 const inputWrapper = document.getElementById('inputWrapper');
 let authMode = 'signin';
 
-// Initialize
 document.addEventListener('DOMContentLoaded', () => {
     loadChatHistory();
     setupEventListeners();
@@ -78,6 +77,7 @@ document.addEventListener('DOMContentLoaded', () => {
     restoreAuthSession();
     checkUrlPrompt();
     updateActiveDocBanner();
+    toggleSendButton();
 });
 
 function checkUrlPrompt() {
@@ -106,10 +106,12 @@ function setupEventListeners() {
         }
     });
 
-    // Input change
-    messageInput.addEventListener('input', () => {
-        autoResizeTextarea();
-        toggleSendButton();
+    // Input change and clipboard events
+    ['input', 'change', 'paste', 'cut', 'keyup'].forEach(evt => {
+        messageInput.addEventListener(evt, () => {
+            autoResizeTextarea();
+            toggleSendButton();
+        });
     });
 
     // New chat
@@ -450,14 +452,64 @@ function startNewChat() {
     messageInput.focus();
 }
 
-// Handle send message
+// Check if query is about the active document or is a general question
+function isDocumentQuery(query) {
+    const q = query.trim().toLowerCase();
+    
+    // Explicit document references
+    const documentKeywords = [
+        'in the document', 'in the pdf', 'in the file', 'in the report',
+        'according to the document', 'according to the pdf',
+        'this document', 'this pdf', 'this file', 'this report',
+        'uploaded document', 'uploaded file',
+        'page ', 'the chart', 'the table', 'the figure', 'the graph',
+        'summarize this', 'summarize the document'
+    ];
+    
+    if (documentKeywords.some(kw => q.includes(kw))) {
+        return true;
+    }
+    
+    // General definitional questions (NOT document-related)
+    const generalPatterns = [
+        /^what\s+is\s+(a|an|the)\s+\w+\??$/i,
+        /^define\s+\w+/i,
+        /^explain\s+(what\s+is|the\s+concept)/i,
+        /^how\s+(does|do|can|to)\s+\w+/i,
+    ];
+    
+    if (generalPatterns.some(pattern => pattern.test(q))) {
+        return false;  // General question, not document-specific
+    }
+    
+    // Follow-up references might be document-related
+    // Check last message for document context
+    const followupWords = ['that', 'this', 'it', 'these', 'those'];
+    if (followupWords.some(w => q.includes(w))) {
+        const messages = messagesContainer.querySelectorAll('.message');
+        if (messages.length > 0) {
+            const lastMsg = messages[messages.length - 1];
+            const lastContent = (lastMsg.querySelector('.message-content')?.textContent || '').toLowerCase();
+            // If last message mentioned document/pages, likely a follow-up
+            if (lastContent.includes('document') || lastContent.includes('page') || lastContent.includes('pdf')) {
+                return true;
+            }
+        }
+    }
+    
+    // Default: not a document query
+    return false;
+}
+
 async function handleSendMessage() {
-    let message = messageInput.value.trim();
     const hasFiles = uploadedFiles.length > 0;
+    if (sendBtn && sendBtn.disabled && !hasFiles) return;
+    if (isProcessing) return;
+
+    let message = messageInput.value.trim();
     const activeDoc = getActiveSessionDoc(currentChatId);
 
     if (!message && !hasFiles) return;
-    if (isProcessing) return;
 
     // Default question if user uploaded file without typing text
     if (!message && hasFiles) {
@@ -488,23 +540,23 @@ async function handleSendMessage() {
         if (hasFiles) {
             // New document upload & analysis mode
             await handleDocumentAnalysis(message);
-        } else if (activeDoc) {
-            // Follow-up question about the document in this conversation
+        } else if (activeDoc && isDocumentQuery(message)) {
+            // Follow-up question ABOUT the document in this conversation
             await handleDocumentFollowUp(message);
         } else {
-            // Standard financial research mode
+            // Standard financial research mode (even if doc exists but query is general)
             await handleResearch(message);
         }
     } catch (error) {
-        console.error('Error:', error);
+        console.error('handleSendMessage error:', error);
         const errorMessage = error.message || JSON.stringify(error);
         if (errorMessage.includes('rate_limit') || errorMessage.includes('429')) {
-            addMessage('assistant', '⚠️ Rate limit reached. The system is automatically retrying with a backup model. Please try your query again in a moment.');
+            showInputError('Rate limit encountered. System will automatically retry.');
         } else {
             showInputError(error.message || 'Failed to process request.');
-            addMessage('assistant', `❌ Error: ${error.message || 'Sorry, I encountered an issue processing your request.'}`);
         }
     } finally {
+        // CRITICAL: Always reset processing state to prevent stuck UI
         setProcessingState(false);
         hideUploadProgress();
     }
@@ -519,22 +571,31 @@ function setProcessingState(processing) {
     
     if (processing) {
         // Show stop button, hide send button
-        sendBtn.style.display = 'none';
-        stopBtn.style.display = 'flex';
+        if (sendBtn) {
+            sendBtn.style.display = 'none';
+            sendBtn.disabled = true;
+        }
+        if (stopBtn) {
+            stopBtn.style.display = 'flex';
+            stopBtn.disabled = false;
+        }
         
         // Disable input
-        inputWrapper.classList.add('disabled');
-        messageInput.disabled = true;
-        attachBtn.disabled = true;
+        if (inputWrapper) inputWrapper.classList.add('disabled');
+        if (messageInput) messageInput.disabled = true;
+        if (attachBtn) attachBtn.disabled = true;
     } else {
         // Hide stop button, show send button
-        stopBtn.style.display = 'none';
-        sendBtn.style.display = 'flex';
+        if (stopBtn) {
+            stopBtn.style.display = 'none';
+            stopBtn.disabled = true;
+        }
+        if (sendBtn) sendBtn.style.display = 'flex';
         
         // Enable input
-        inputWrapper.classList.remove('disabled');
-        messageInput.disabled = false;
-        attachBtn.disabled = false;
+        if (inputWrapper) inputWrapper.classList.remove('disabled');
+        if (messageInput) messageInput.disabled = false;
+        if (attachBtn) attachBtn.disabled = false;
         
         // Reset controller
         currentRequestController = null;
@@ -545,6 +606,9 @@ function setProcessingState(processing) {
 
 // Handle stop generation
 function handleStopGeneration() {
+    if (stopBtn) {
+        stopBtn.disabled = true;
+    }
     if (currentRequestController) {
         currentRequestController.abort();
         currentRequestController = null;
@@ -554,53 +618,335 @@ function handleStopGeneration() {
 }
 
 // Extract conversation turns for reference resolution
-function getRecentConversationTurns() {
+function getRecentConversationTurns(maxTurns = 6) {
     const turns = [];
     const messageElements = messagesContainer.querySelectorAll('.message');
     messageElements.forEach(el => {
         const isUser = el.classList.contains('user');
-        const text = el.querySelector('.message-content') ? el.querySelector('.message-content').innerText : '';
-        if (text) {
-            turns.push({
-                role: isUser ? 'user' : 'assistant',
-                content: text.slice(0, 300)
-            });
+        const contentEl = el.querySelector('.message-content');
+        if (contentEl) {
+            // Extract text content, preserving important info but limiting length
+            const text = contentEl.innerText || contentEl.textContent || '';
+            if (text.trim()) {
+                turns.push({
+                    role: isUser ? 'user' : 'assistant',
+                    content: text.slice(0, 500)  // Increased from 300 to 500 for better context
+                });
+            }
         }
     });
-    return turns.slice(-4);
+    // Return last N turns (user + assistant pairs)
+    return turns.slice(-maxTurns);
 }
 
-// Handle research request
+// Helper function to add a loading message
+function addLoadingMessage() {
+    const loadingId = 'loading-' + Date.now();
+    const loadingDiv = document.createElement('div');
+    loadingDiv.className = 'message assistant';
+    loadingDiv.id = loadingId;
+    
+    loadingDiv.innerHTML = `
+        <div class="message-header">
+            <div class="message-avatar">I</div>
+            <div class="message-author">Irium</div>
+        </div>
+        <div class="message-content">
+            <div class="typing-indicator">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+        </div>
+    `;
+    
+    messagesContainer.appendChild(loadingDiv);
+    scrollToBottom();
+    return loadingId;
+}
+
+// Helper function to remove loading message
+function removeLoadingMessage(loadingId) {
+    const loadingDiv = document.getElementById(loadingId);
+    if (loadingDiv) {
+        loadingDiv.remove();
+    }
+}
+
+// Handle research request (non-streaming, simple and reliable)
 async function handleResearch(query) {
     const loadingId = addLoadingMessage();
     currentRequestController = new AbortController();
 
     try {
+        // Build request with conversation context
+        const requestBody = {
+            query: query,
+            conversation_id: currentChatId,
+            conversation_history: getRecentConversationTurns(6)
+        };
+
         const response = await fetch(apiUrl('/api/research'), {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 ...authHeaders(),
             },
-            body: JSON.stringify({ query }),
+            body: JSON.stringify(requestBody),
             signal: currentRequestController.signal,
         });
 
+        // Remove loading indicator
+        removeLoadingMessage(loadingId);
+
         if (!response.ok) {
             const errData = await response.json().catch(() => ({}));
-            throw new Error(errData.detail || `HTTP error! status: ${response.status}`);
+            
+            // Handle structured error responses (e.g., INVALID_QUERY_DOMAIN)
+            let errorMessage = '';
+            if (errData.detail && typeof errData.detail === 'object') {
+                // Structured error with message field
+                errorMessage = errData.detail.message || errData.detail.error || 'An error occurred';
+            } else if (typeof errData.detail === 'string') {
+                // Simple string error
+                errorMessage = errData.detail;
+            } else {
+                // Fallback
+                errorMessage = `HTTP error! status: ${response.status}`;
+            }
+            
+            throw new Error(errorMessage);
         }
 
         const data = await response.json();
-        removeMessage(loadingId);
-        addResearchMessage(data);
+        
+        // Check for clarification
+        if (data.requires_clarification) {
+            const clarificationMsg = data.clarification_question || data.answer;
+            addMessage('assistant', clarificationMsg);
+            return;
+        }
+
+        // Check if this is a report response
+        if (data.type === 'report') {
+            addReportMessage(data);
+            return;
+        }
+
+        // Build final content with answer, visualizations, and sources
+        let answerContent = '';
+        
+        // Get answer
+        const answer = data.answer || data.result?.answer || '';
+        if (typeof answer === 'string') {
+            answerContent = answer;
+        } else if (typeof answer === 'object' && answer.summary) {
+            answerContent = answer.summary;
+        } else {
+            answerContent = JSON.stringify(answer);
+        }
+
+        // Format the answer (markdown rendering)
+        let finalContent = formatMarkdown(answerContent);
+
+        // Append chart visualizations if available
+        const visualizations = data.visualizations || data.result?.visualizations || [];
+        if (Array.isArray(visualizations) && visualizations.length > 0 && typeof renderVisualizations === 'function') {
+            finalContent += renderVisualizations(visualizations);
+        }
+
+        // Append sources if available (raw HTML, not markdown)
+        const sources = data.sources || data.result?.sources || [];
+        if (sources.length > 0) {
+            let sourcesHtml = '<div class="sources">';
+            sourcesHtml += '<div class="sources-title">Sources:</div>';
+            sourcesHtml += '<div class="source-list">';
+            sources.forEach((source) => {
+                const sourceUrl = source.url || source.source_url || '#';
+                const sourceTitle = source.title || source.source_title || source.name || source.source_name || sourceUrl;
+                sourcesHtml += `
+                    <a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener" class="source-link">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <polyline points="15 3 21 3 21 9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <line x1="10" y1="14" x2="21" y2="3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        ${escapeHtml(sourceTitle)}
+                    </a>
+                `;
+            });
+            sourcesHtml += '</div></div>';
+            finalContent += sourcesHtml;
+        }
+
+        // Add the complete message (skip formatMarkdown in addMessage since we already formatted)
+        addMessageRaw('assistant', finalContent);
+
+        // Auto-save messages to history
+        if (currentChatId) {
+            saveCurrentChatMessages();
+        }
 
     } catch (error) {
-        removeMessage(loadingId);
+        // Remove loading indicator on error
+        removeLoadingMessage(loadingId);
+        
+        console.error('Research request error:', error);
         if (error.name !== 'AbortError') {
-            throw error;
+            const errorMessage = error.message || 'Error processing request.';
+            
+            // Check if this is a domain validation error
+            const isDomainError = errorMessage.includes('outside IRIUM\'s scope') || 
+                                  errorMessage.includes('specializes in');
+            
+            // Create an enhanced, user-friendly error message display
+            const errorHtml = `
+                <div class="error-message-card" style="
+                    background: linear-gradient(135deg, #2a1a1a 0%, #1a1414 100%);
+                    border: 1px solid rgba(255, 100, 100, 0.3);
+                    border-left: 4px solid #ff6464;
+                    border-radius: 16px;
+                    padding: 24px;
+                    margin: 16px 0;
+                    box-shadow: 0 4px 20px rgba(255, 100, 100, 0.1);
+                    animation: slideIn 0.3s ease-out;
+                ">
+                    <style>
+                        @keyframes slideIn {
+                            from {
+                                opacity: 0;
+                                transform: translateY(-10px);
+                            }
+                            to {
+                                opacity: 1;
+                                transform: translateY(0);
+                            }
+                        }
+                        .error-icon {
+                            animation: pulse 2s ease-in-out infinite;
+                        }
+                        @keyframes pulse {
+                            0%, 100% { transform: scale(1); }
+                            50% { transform: scale(1.1); }
+                        }
+                        .example-button {
+                            background: linear-gradient(135deg, #4a4a4a 0%, #333 100%);
+                            border: 1px solid rgba(255, 255, 255, 0.1);
+                            border-radius: 8px;
+                            padding: 8px 16px;
+                            margin: 4px;
+                            cursor: pointer;
+                            transition: all 0.2s ease;
+                            display: inline-block;
+                            font-size: 13px;
+                            color: var(--text-primary);
+                        }
+                        .example-button:hover {
+                            background: linear-gradient(135deg, #5a5a5a 0%, #444 100%);
+                            border-color: rgba(100, 200, 255, 0.5);
+                            transform: translateY(-2px);
+                            box-shadow: 0 4px 12px rgba(100, 200, 255, 0.2);
+                        }
+                        .capability-item {
+                            display: flex;
+                            align-items: center;
+                            gap: 12px;
+                            padding: 8px 0;
+                            opacity: 0;
+                            animation: fadeInItem 0.3s ease-out forwards;
+                        }
+                        .capability-item:nth-child(1) { animation-delay: 0.1s; }
+                        .capability-item:nth-child(2) { animation-delay: 0.15s; }
+                        .capability-item:nth-child(3) { animation-delay: 0.2s; }
+                        .capability-item:nth-child(4) { animation-delay: 0.25s; }
+                        .capability-item:nth-child(5) { animation-delay: 0.3s; }
+                        .capability-item:nth-child(6) { animation-delay: 0.35s; }
+                        @keyframes fadeInItem {
+                            from {
+                                opacity: 0;
+                                transform: translateX(-10px);
+                            }
+                            to {
+                                opacity: 1;
+                                transform: translateX(0);
+                            }
+                        }
+                    </style>
+                    
+                    <div style="display: flex; align-items: flex-start; gap: 16px;">
+                        <div class="error-icon" style="
+                            font-size: 32px;
+                            min-width: 32px;
+                            filter: drop-shadow(0 2px 8px rgba(255, 100, 100, 0.3));
+                        ">⚠</div>
+                        
+                        <div style="flex: 1;">
+                            <div style="
+                                font-weight: 700;
+                                color: #ff8888;
+                                margin-bottom: 16px;
+                                font-size: 18px;
+                                letter-spacing: 0.5px;
+                            ">Query Not Allowed</div>
+                            
+                            <div style="
+                                color: var(--text-primary);
+                                line-height: 1.7;
+                                white-space: pre-wrap;
+                                margin-bottom: 20px;
+                                padding: 16px;
+                                background: rgba(255, 255, 255, 0.03);
+                                border-radius: 8px;
+                                border-left: 2px solid rgba(255, 100, 100, 0.3);
+                            ">${escapeHtml(errorMessage)}</div>
+                            
+                            ${isDomainError ? `
+                                <div style="
+                                    margin-top: 24px;
+                                    padding-top: 20px;
+                                    border-top: 1px solid rgba(255, 255, 255, 0.1);
+                                ">
+                                    <div style="
+                                        font-weight: 600;
+                                        color: #88ccff;
+                                        margin-bottom: 16px;
+                                        font-size: 15px;
+                                        display: flex;
+                                        align-items: center;
+                                        gap: 8px;
+                                    ">
+                                        <span style="font-size: 18px;">→</span>
+                                        <span>Try asking about these topics instead:</span>
+                                    </div>
+                                    
+                                    <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px;">
+                                        <button class="example-button" onclick="window.tryExampleQuery('What is GDP and how is it calculated?')">
+                                            What is GDP?
+                                        </button>
+                                        <button class="example-button" onclick="window.tryExampleQuery('Explain inflation and its impact on economy')">
+                                            Inflation Impact
+                                        </button>
+                                        <button class="example-button" onclick="window.tryExampleQuery('What are stock market indices?')">
+                                            Stock Indices
+                                        </button>
+                                        <button class="example-button" onclick="window.tryExampleQuery('Compare HDFC and ICICI Bank performance')">
+                                            Bank Comparison
+                                        </button>
+                                        <button class="example-button" onclick="window.tryExampleQuery('Explain cryptocurrency and blockchain in finance')">
+                                            Crypto Finance
+                                        </button>
+                                    </div>
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            addMessageRaw('assistant', errorHtml);
+            throw error; // Re-throw to be caught by handleSendMessage
         } else {
-            addMessage('assistant', '⚠️ Generation stopped by user.');
+            addMessage('assistant', '<p style="color: var(--text-tertiary); font-style: italic;">Generation stopped by user.</p>');
         }
     }
 }
@@ -755,6 +1101,37 @@ function addMessage(role, content, metadata = {}) {
     return messageId;
 }
 
+// Add message with raw HTML content (no markdown processing)
+function addMessageRaw(role, htmlContent) {
+    const messageId = generateMessageId();
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `message ${role}`;
+    messageDiv.id = messageId;
+
+    const avatar = role === 'user' ? 'You' : 'AI';
+    const avatarInitial = role === 'user' ? 'Y' : 'I';
+
+    messageDiv.innerHTML = `
+        <div class="message-header">
+            <div class="message-avatar">${avatarInitial}</div>
+            <div class="message-author">${avatar}</div>
+        </div>
+        <div class="message-content">
+            ${htmlContent}
+        </div>
+    `;
+
+    messagesContainer.appendChild(messageDiv);
+    scrollToBottom();
+    
+    // Auto-save messages
+    if (currentChatId) {
+        saveCurrentChatMessages();
+    }
+
+    return messageId;
+}
+
 // Add research message with metadata
 function addResearchMessage(data) {
     const messageId = generateMessageId();
@@ -764,7 +1141,7 @@ function addResearchMessage(data) {
 
     let content = '';
 
-    // Handle structured answer format
+    // Handle structured answer format - format markdown separately
     if (data.answer && typeof data.answer === 'object' && data.answer.sections) {
         content = formatMarkdown(data.answer);
     } else if (typeof data.answer === 'string') {
@@ -773,16 +1150,22 @@ function addResearchMessage(data) {
         content = '<p>Invalid response format</p>';
     }
 
-    // Add sources if available (from data.sources or data.answer.sources)
+    // Render chart visualizations if available
+    const visualizations = data.visualizations || (data.answer && data.answer.visualizations) || [];
+    if (Array.isArray(visualizations) && visualizations.length > 0 && typeof renderVisualizations === 'function') {
+        content += renderVisualizations(visualizations);
+    }
+
+    // Add sources if available - append as raw HTML (no markdown escaping)
     const sources = data.sources || (data.answer && data.answer.sources) || [];
     if (sources.length > 0) {
-        content += '<div class="sources">';
-        content += '<div class="sources-title">Sources:</div>';
-        content += '<div class="source-list">';
+        let sourcesHtml = '<div class="sources">';
+        sourcesHtml += '<div class="sources-title">Sources:</div>';
+        sourcesHtml += '<div class="source-list">';
         sources.forEach((source) => {
             const sourceUrl = source.url || source.source_url || '#';
             const sourceTitle = source.title || source.source_title || source.name || source.source_name || sourceUrl;
-            content += `
+            sourcesHtml += `
                 <a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener" class="source-link">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
                         <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -793,8 +1176,62 @@ function addResearchMessage(data) {
                 </a>
             `;
         });
-        content += '</div></div>';
+        sourcesHtml += '</div></div>';
+        content += sourcesHtml;
     }
+
+    messageDiv.innerHTML = `
+        <div class="message-header">
+            <div class="message-avatar">I</div>
+            <div class="message-author">Irium</div>
+        </div>
+        <div class="message-content">
+            ${content}
+        </div>
+    `;
+
+    messagesContainer.appendChild(messageDiv);
+    scrollToBottom();
+    
+    // Auto-save messages
+    if (currentChatId) {
+        saveCurrentChatMessages();
+    }
+
+    return messageId;
+}
+
+// Add report message with download card
+function addReportMessage(data) {
+    const messageId = generateMessageId();
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message assistant';
+    messageDiv.id = messageId;
+
+    // Format: PDF • 3 pages or DOCX • ? pages
+    const formatUpper = data.format.toUpperCase();
+    const pagesInfo = data.pages ? `${data.pages} page${data.pages !== 1 ? 's' : ''}` : '? pages';
+    
+    const content = `
+        <div class="report-card">
+            <div class="report-icon">${data.format === 'pdf' ? '📄' : '📝'}</div>
+            <div class="report-info">
+                <h3 class="report-title">${escapeHtml(data.title || 'Report')}</h3>
+                <p class="report-meta">${formatUpper} • ${pagesInfo}</p>
+                ${data.message ? `<p class="report-message">${escapeHtml(data.message)}</p>` : ''}
+            </div>
+            <a href="${apiUrl(data.download_url)}" 
+               download="${escapeHtml(data.filename)}"
+               class="download-btn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <polyline points="7 10 12 15 17 10" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <line x1="12" y1="15" x2="12" y2="3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                Download ${formatUpper}
+            </a>
+        </div>
+    `;
 
     messageDiv.innerHTML = `
         <div class="message-header">
@@ -841,6 +1278,12 @@ function addDocumentAnalysisMessage(data) {
         ${formattedAnswer}
     `;
 
+    // Render chart visualizations if available in document responses
+    const docVisualizations = data.visualizations || (data.answer && data.answer.visualizations) || [];
+    if (Array.isArray(docVisualizations) && docVisualizations.length > 0 && typeof renderVisualizations === 'function') {
+        content += renderVisualizations(docVisualizations);
+    }
+
     // Add document sources and cited pages
     const isGeneralQuery = Boolean(data.metadata && data.metadata.is_general_query);
     const hasDocs = !isGeneralQuery && data.documents && data.documents.length > 0;
@@ -886,12 +1329,29 @@ function addDocumentAnalysisMessage(data) {
     return messageId;
 }
 
-// Add loading message
-function addLoadingMessage() {
+// Add loading message with optional custom text
+function addLoadingMessage(text = null) {
     const messageId = generateMessageId();
     const messageDiv = document.createElement('div');
     messageDiv.className = 'message assistant';
     messageDiv.id = messageId;
+
+    let contentHTML;
+    if (text) {
+        contentHTML = `
+            <div class="stream-status">
+                <div class="stream-status-text">${escapeHtml(text)}</div>
+            </div>
+        `;
+    } else {
+        contentHTML = `
+            <div class="loading-dots">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+        `;
+    }
 
     messageDiv.innerHTML = `
         <div class="message-header">
@@ -899,11 +1359,7 @@ function addLoadingMessage() {
             <div class="message-author">Irium</div>
         </div>
         <div class="message-content">
-            <div class="loading-dots">
-                <span></span>
-                <span></span>
-                <span></span>
-            </div>
+            ${contentHTML}
         </div>
     `;
 
@@ -911,6 +1367,23 @@ function addLoadingMessage() {
     scrollToBottom();
 
     return messageId;
+}
+
+// Update loading message with new text
+function updateLoadingMessage(messageId, text) {
+    const messageDiv = document.getElementById(messageId);
+    if (!messageDiv) return;
+    
+    const contentDiv = messageDiv.querySelector('.message-content');
+    if (!contentDiv) return;
+    
+    contentDiv.innerHTML = `
+        <div class="stream-status">
+            <div class="stream-status-text">${escapeHtml(text)}</div>
+        </div>
+    `;
+    
+    scrollToBottom();
 }
 
 // Remove message
@@ -930,6 +1403,110 @@ function formatMessage(content, metadata = {}, role = 'assistant') {
     return formatMarkdown(content);
 }
 
+// Math formula rendering helper (KaTeX with semantic HTML fallback)
+function renderMathFormula(latex, isDisplay = true) {
+    if (!latex) return '';
+    let raw = latex.trim();
+    
+    // Strip surrounding brackets if present: [ ... ] or \[ ... \]
+    if (raw.startsWith('\\[') && raw.endsWith('\\]')) {
+        raw = raw.slice(2, -2).trim();
+    } else if (raw.startsWith('$$') && raw.endsWith('$$')) {
+        raw = raw.slice(2, -2).trim();
+    } else if (raw.startsWith('[') && raw.endsWith(']')) {
+        raw = raw.slice(1, -1).trim();
+    }
+
+    // Normalize common LLM dropped-underscore subscripts: \text{A}{\text{B}} or \text{A}{B} -> \text{A}_{\text{B}}
+    raw = raw.replace(/(\\text\{[^{}]*\})\{(\s*\\text\{[^{}]*\}|[a-zA-Z0-9_\s]+)\}/g, '$1_{$2}');
+
+    // Try KaTeX if available on window
+    if (typeof katex !== 'undefined' && typeof katex.renderToString === 'function') {
+        try {
+            return katex.renderToString(raw, {
+                displayMode: isDisplay,
+                throwOnError: false
+            });
+        } catch (e) {
+            console.warn('KaTeX rendering error, falling back to clean text math:', e);
+        }
+    }
+
+    // High quality semantic fallback for mathematical & financial formulas
+    let clean = raw;
+    clean = clean.replace(/\\text\{([^{}]+)\}/g, '$1');
+    clean = clean.replace(/_\{([^{}]+)\}/g, '<sub>$1</sub>');
+    clean = clean.replace(/_([a-zA-Z0-9]+)/g, '<sub>$1</sub>');
+    clean = clean.replace(/\^\{([^{}]+)\}/g, '<sup>$1</sup>');
+    clean = clean.replace(/\^([a-zA-Z0-9]+)/g, '<sup>$1</sup>');
+    clean = clean.replace(/\\times\b/g, ' × ');
+    clean = clean.replace(/\\approx\b/g, ' ≈ ');
+    clean = clean.replace(/\\cdot\b/g, ' · ');
+    clean = clean.replace(/\\pm\b/g, ' ± ');
+    clean = clean.replace(/\\Delta\b/g, 'Δ');
+    clean = clean.replace(/\\le\b|\\leq\b/g, ' ≤ ');
+    clean = clean.replace(/\\ge\b|\\geq\b/g, ' ≥ ');
+    clean = clean.replace(/\\neq\b/g, ' ≠ ');
+    clean = clean.replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, '($1 / $2)');
+    clean = clean.replace(/[{}]/g, '');
+    clean = clean.replace(/\\/g, '');
+
+    const tagClass = isDisplay ? 'math-formula-card' : 'math-formula-inline';
+    return `<div class="${tagClass}"><span class="math-formula-content">${clean}</span></div>`;
+}
+
+// Preprocess raw markdown text to normalize section headings, math blocks, and tables
+function preprocessMarkdownAndMath(text) {
+    if (!text || typeof text !== 'string') return { text: '', mathBlocks: [] };
+
+    // 1. Normalize numbered section headings (e.g. "1.2 Impact on..." -> "### 1.2 Impact on...")
+    text = text.replace(/(^|\n)(?:\s*)([0-9]+\.[0-9]+(?:\.[0-9]+)?\s+[A-Za-z].*?)(?=\n|$)/g, '$1### $2');
+
+    // 2. Extract math blocks and replace with placeholders before marked.parse
+    const mathBlocks = [];
+    const displayMathRegex = /(?:\\\[\s*([\s\S]*?)\s*\\\]|\$\$\s*([\s\S]*?)\s*\$\$|(?:\n|^)\s*\[\s*\n+([\s\S]*?(?:\\text|\\times|\\approx|\\frac|=|\\cdot|\\Delta)[\s\S]*?)\n+\s*\](?=\n|$))/g;
+
+    text = text.replace(displayMathRegex, (match, p1, p2, p3) => {
+        const raw = (p1 || p2 || p3 || '').trim();
+        const placeholder = `@@MATH_DISPLAY_BLOCK_${mathBlocks.length}@@`;
+        mathBlocks.push(renderMathFormula(raw, true));
+        return `\n\n${placeholder}\n\n`;
+    });
+
+    // 3. Balance incomplete markdown table rows (pad missing trailing cells with '—')
+    const lines = text.split('\n');
+    let inTable = false;
+    let expectedCols = 0;
+    const processedLines = [];
+
+    for (let i = 0; i < lines.length; i++) {
+        let line = lines[i];
+        const trimmed = line.trim();
+        if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+            const cells = trimmed.split('|').slice(1, -1);
+            if (!inTable) {
+                inTable = true;
+                expectedCols = cells.length;
+            } else if (trimmed.includes('---')) {
+                // separator row
+            } else {
+                // data row
+                if (cells.length < expectedCols) {
+                    const diff = expectedCols - cells.length;
+                    line = line.replace(/\|\s*$/, '') + ' | —'.repeat(diff) + ' |';
+                }
+            }
+        } else {
+            inTable = false;
+            expectedCols = 0;
+        }
+        processedLines.push(line);
+    }
+    text = processedLines.join('\n');
+
+    return { text, mathBlocks };
+}
+
 // Render markdown and structured answer format
 function formatMarkdown(answer) {
     if (!answer) return '';
@@ -937,28 +1514,23 @@ function formatMarkdown(answer) {
     // Check if answer is structured JSON format
     if (typeof answer === 'object' && answer.sections) {
         // Check if any section contains nested JSON in its content
-        let hasNestedJson = false;
         if (Array.isArray(answer.sections)) {
             for (let section of answer.sections) {
                 if (section.content && typeof section.content === 'string') {
                     const content = section.content.trim();
-                    // Check if content is JSON
                     if (content.startsWith('{') && content.includes('sections')) {
                         try {
                             const parsedContent = JSON.parse(content);
                             if (parsedContent.sections && Array.isArray(parsedContent.sections)) {
-                                console.log('Detected nested JSON in section content, parsing as structured data');
                                 return `<div class="markdown-content">${renderStructuredAnswer(parsedContent)}</div>`;
                             }
                         } catch (e) {
-                            // Not valid JSON, continue with normal rendering
+                            // continue
                         }
                     }
                 }
             }
         }
-        
-        // No nested JSON found, render normally
         return `<div class="markdown-content">${renderStructuredAnswer(answer)}</div>`;
     }
 
@@ -971,26 +1543,23 @@ function formatMarkdown(answer) {
         try {
             const parsedAnswer = JSON.parse(answer);
             if (parsedAnswer.sections && Array.isArray(parsedAnswer.sections)) {
-                console.log('Detected embedded JSON in string content, parsing as structured data');
                 return `<div class="markdown-content">${renderStructuredAnswer(parsedAnswer)}</div>`;
             }
         } catch (e) {
-            console.warn('Content looks like JSON but failed to parse:', e);
-            // Continue with regular text processing
+            // continue with regular markdown parsing
         }
     }
 
+    const { text: preprocessed, mathBlocks } = preprocessMarkdownAndMath(answer);
     let parsedHtml = '';
 
     if (typeof marked !== 'undefined' && marked.parse) {
         try {
-            // Configure marked with GFM, breaks, and custom table wrapper hook
             marked.use({
                 gfm: true,
                 breaks: true,
                 hooks: {
                     postprocess(html) {
-                        // Wrap all <table> elements in .markdown-table-wrapper for horizontal scroll
                         return html.replace(/<table(\s*[^>]*)?>([\s\S]*?)<\/table>/gi, (match) => {
                             return `<div class="markdown-table-wrapper">${match}</div>`;
                         });
@@ -998,14 +1567,20 @@ function formatMarkdown(answer) {
                 }
             });
 
-            parsedHtml = marked.parse(answer);
+            parsedHtml = marked.parse(preprocessed);
         } catch (err) {
             console.error('Error in marked parser:', err);
-            parsedHtml = fallbackMarkdownParse(answer);
+            parsedHtml = fallbackMarkdownParse(preprocessed);
         }
     } else {
-        parsedHtml = fallbackMarkdownParse(answer);
+        parsedHtml = fallbackMarkdownParse(preprocessed);
     }
+
+    // Restore math blocks safely
+    mathBlocks.forEach((rendered, idx) => {
+        parsedHtml = parsedHtml.replace(`<p>@@MATH_DISPLAY_BLOCK_${idx}@@</p>`, rendered)
+                               .replace(`@@MATH_DISPLAY_BLOCK_${idx}@@`, rendered);
+    });
 
     // Highlight [Page X] citations as interactive pills
     parsedHtml = parsedHtml.replace(/\[Page\s+(\d+)\]/gi, (match, pNum) => {
@@ -1018,11 +1593,16 @@ function formatMarkdown(answer) {
         return `<span class="citation-pill image-ref">🖼️ Visual Analysis</span>`;
     });
 
-    // Sanitize with DOMPurify if available
+    // Sanitize with DOMPurify if available, preserving math, table, and formatting markup
     if (typeof DOMPurify !== 'undefined' && DOMPurify.sanitize) {
         parsedHtml = DOMPurify.sanitize(parsedHtml, {
-            ADD_ATTR: ['target', 'rel', 'class', 'style'],
-            ADD_TAGS: ['span', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'div', 'input']
+            ADD_ATTR: ['target', 'rel', 'class', 'style', 'xmlns', 'display', 'aria-hidden'],
+            ADD_TAGS: [
+                'span', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'div', 'input', 
+                'sub', 'sup', 'math', 'annotation', 'semantics', 'mtext', 'mn', 'mo', 
+                'mi', 'mspace', 'mover', 'munder', 'mrow', 'mfrac', 'msqrt', 'mroot', 
+                'msub', 'msup', 'msubsup'
+            ]
         });
     }
 
@@ -1087,6 +1667,10 @@ function renderStructuredAnswer(data) {
                 `;
             } else if (section.type === 'table') {
                 html += renderTable(section);
+            } else if (section.type === 'chart' || section.type === 'visualization') {
+                if (typeof renderSingleChart === 'function') {
+                    html += renderSingleChart(section, index);
+                }
             } else {
                 // Handle unknown section types gracefully
                 console.warn(`Unknown section type '${section.type}' at index ${index}`);
@@ -1117,39 +1701,112 @@ function renderStructuredAnswer(data) {
     return html;
 }
 
-// Format text content (preserve paragraphs and line breaks)
+// Format text content (run through full markdown formatting for rich typography and math)
 function formatTextContent(content) {
     if (!content) return '';
-    
-    // Escape HTML
-    const escaped = escapeHtml(content);
-    
-    // Split into paragraphs and format
-    const paragraphs = escaped.split('\n\n').filter(p => p.trim());
-    
-    if (paragraphs.length === 0) {
-        return escaped.replace(/\n/g, '<br>');
-    }
-    
-    return paragraphs.map(para => {
-        return `<p>${para.replace(/\n/g, '<br>')}</p>`;
-    }).join('');
+    return formatMarkdown(content);
 }
 
-// Render table section
+// Robust table cell value extractor supporting multiple naming patterns and synonyms
+function getTableCellValue(row, colName, colIndex, allColumns) {
+    if (row === null || row === undefined) return '';
+
+    if (Array.isArray(row)) {
+        if (colIndex < row.length && row[colIndex] !== undefined && row[colIndex] !== null) {
+            return String(row[colIndex]);
+        }
+        return '';
+    }
+
+    if (typeof row === 'object') {
+        // 1. Direct key match
+        if (row[colName] !== undefined && row[colName] !== null) {
+            return String(row[colName]);
+        }
+
+        // 2. Case-insensitive key match
+        const colLower = colName.trim().toLowerCase();
+        for (const [k, v] of Object.entries(row)) {
+            if (k.trim().toLowerCase() === colLower && v !== undefined && v !== null) {
+                return String(v);
+            }
+        }
+
+        // 3. Normalized alphanumeric match
+        const colNorm = colLower.replace(/[^a-z0-9]/g, '');
+        for (const [k, v] of Object.entries(row)) {
+            if (k.toLowerCase().replace(/[^a-z0-9]/g, '') === colNorm && v !== undefined && v !== null) {
+                return String(v);
+            }
+        }
+
+        // 4. Financial table synonym mapping
+        const synonyms = {
+            'takeaway': ['takeaway', 'key takeaway', 'point', 'finding', 'insight', 'aspect', 'observation', 'factor', 'event', 'summary'],
+            'implication': ['implication', 'implications', 'impact', 'economic impact', 'financial impact', 'effect', 'consequence', 'outcome', 'result', 'detail', 'details', 'description', 'notes'],
+            'metric': ['metric', 'indicator', 'kpi', 'measure', 'parameter', 'item'],
+            'value': ['value', 'amount', 'figure', 'number', 'data', 'stat'],
+            'period': ['period', 'year', 'quarter', 'date', 'timeline', 'timeframe', 'fy']
+        };
+
+        for (const [canonical, list] of Object.entries(synonyms)) {
+            if (list.some(s => colLower.includes(s) || s.includes(colLower))) {
+                for (const syn of list) {
+                    for (const [k, v] of Object.entries(row)) {
+                        const kLower = k.toLowerCase();
+                        if ((kLower === syn || kLower.includes(syn)) && v !== undefined && v !== null && String(v).trim()) {
+                            return String(v);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 5. Positional fallback from object keys
+        const keys = Object.keys(row);
+        if (colIndex < keys.length && row[keys[colIndex]] !== undefined && row[keys[colIndex]] !== null) {
+            return String(row[keys[colIndex]]);
+        }
+    }
+
+    return String(row);
+}
+
+// Format individual table cell content with inline markdown and empty placeholder
+function formatTableCell(value) {
+    if (value === undefined || value === null || String(value).trim() === '') {
+        return '<span class="empty-cell-dash">—</span>';
+    }
+
+    const str = String(value).trim();
+
+    if (typeof marked !== 'undefined' && typeof marked.parseInline === 'function') {
+        try {
+            return marked.parseInline(str);
+        } catch (e) {
+            // fallback
+        }
+    }
+
+    return escapeHtml(str)
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>');
+}
+
+// Render table section with full column alignment, synonym fallback, and inline formatting
 function renderTable(section) {
     if (!section.columns || !section.rows) {
         return '<p>Invalid table format</p>';
     }
 
     let html = `<div class="answer-section table-section">`;
-    
+
     if (section.title) {
         html += `<h3 class="section-title">${escapeHtml(section.title)}</h3>`;
     }
 
     html += '<div class="table-wrapper"><table class="data-table">';
-    
+
     // Table header
     html += '<thead><tr>';
     section.columns.forEach(col => {
@@ -1161,14 +1818,19 @@ function renderTable(section) {
     html += '<tbody>';
     section.rows.forEach(row => {
         html += '<tr>';
-        row.forEach(cell => {
-            html += `<td>${escapeHtml(String(cell))}</td>`;
+
+        section.columns.forEach((colName, colIdx) => {
+            const rawValue = getTableCellValue(row, colName, colIdx, section.columns);
+            const formattedCell = formatTableCell(rawValue);
+            html += `<td>${formattedCell}</td>`;
         });
+
         html += '</tr>';
     });
     html += '</tbody>';
 
-    html += '</table></div></div>';
+    html += '</table></div>';
+    html += '</div>';
 
     return html;
 }
@@ -1179,6 +1841,26 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
+
+// Helper function to try example queries from error message
+window.tryExampleQuery = function(exampleQuery) {
+    if (!messageInput) return;
+    
+    // Set the query in the input
+    messageInput.value = exampleQuery;
+    autoResizeTextarea();
+    toggleSendButton();
+    
+    // Focus the input
+    messageInput.focus();
+    
+    // Optionally, auto-submit after a brief moment
+    setTimeout(() => {
+        if (messageInput.value === exampleQuery && !isProcessing) {
+            handleSendMessage();
+        }
+    }, 500);
+};
 
 // ============================================================================
 // Document Intelligence & File Handling Helpers
@@ -1567,3 +2249,151 @@ function escapeHtml(text) {
 if (!currentChatId) {
     currentChatId = generateChatId();
 }
+
+
+// ==========================================
+// FLOATING SCROLL-TO-BOTTOM BUTTON
+// ==========================================
+
+const scrollToBottomBtn = document.getElementById('scrollToBottomBtn');
+const chatContainer = document.querySelector('.chat-container'); // The actual scrollable container
+let isUserScrolling = false;
+let scrollTimeout = null;
+
+/**
+ * Check if user is at the bottom of the chat container
+ */
+function isAtBottom() {
+    if (!chatContainer) return true;
+    
+    const threshold = 150; // pixels from bottom
+    const scrollTop = chatContainer.scrollTop;
+    const scrollHeight = chatContainer.scrollHeight;
+    const clientHeight = chatContainer.clientHeight;
+    
+    return (scrollHeight - scrollTop - clientHeight) < threshold;
+}
+
+/**
+ * Scroll to the bottom of messages smoothly
+ */
+function scrollToBottom(behavior = 'smooth') {
+    if (chatContainer) {
+        chatContainer.scrollTo({
+            top: chatContainer.scrollHeight,
+            behavior: behavior
+        });
+    }
+}
+
+/**
+ * Update the visibility of the scroll-to-bottom button
+ */
+function updateScrollButton() {
+    if (!scrollToBottomBtn) return;
+    
+    const atBottom = isAtBottom();
+    
+    if (atBottom) {
+        scrollToBottomBtn.classList.remove('visible');
+    } else {
+        scrollToBottomBtn.classList.add('visible');
+    }
+}
+
+/**
+ * Handle scroll events on chat container
+ */
+function handleMessagesScroll() {
+    // Clear any existing timeout
+    if (scrollTimeout) {
+        clearTimeout(scrollTimeout);
+    }
+    
+    // Mark that user is scrolling
+    isUserScrolling = true;
+    
+    // Update button visibility immediately
+    updateScrollButton();
+    
+    // Reset the scrolling flag after a delay
+    scrollTimeout = setTimeout(() => {
+        isUserScrolling = false;
+    }, 150);
+}
+
+/**
+ * Auto-scroll when AI generates a response (only if user is already at bottom)
+ */
+function autoScrollIfAtBottom() {
+    if (isAtBottom() && !isUserScrolling) {
+        scrollToBottom('smooth');
+    }
+}
+
+/**
+ * Force scroll to bottom (used when sending a message)
+ */
+function forceScrollToBottom() {
+    scrollToBottom('smooth');
+}
+
+// Event Listeners for Scroll Button
+if (scrollToBottomBtn) {
+    scrollToBottomBtn.addEventListener('click', () => {
+        forceScrollToBottom();
+        scrollToBottomBtn.classList.remove('visible');
+    });
+}
+
+// Scroll event listener on chat container (the actual scrollable element)
+if (chatContainer) {
+    chatContainer.addEventListener('scroll', handleMessagesScroll);
+    
+    // Initial check
+    updateScrollButton();
+}
+
+// Observe DOM changes in messages container (for auto-scroll during AI response)
+if (messagesContainer) {
+    const observer = new MutationObserver((mutations) => {
+        // Only auto-scroll if user was already at the bottom
+        autoScrollIfAtBottom();
+        
+        // Update button visibility
+        updateScrollButton();
+    });
+    
+    observer.observe(messagesContainer, {
+        childList: true,
+        subtree: true,
+        characterData: true
+    });
+}
+
+/**
+ * Enhanced sendMessage function with scroll behavior
+ * This integrates with the existing sendMessage function
+ */
+const originalSendMessage = window.sendMessage;
+if (typeof originalSendMessage === 'function') {
+    window.sendMessage = async function(...args) {
+        // Call the original function
+        const result = await originalSendMessage.apply(this, args);
+        
+        // Force scroll to bottom when user sends a message
+        setTimeout(() => {
+            forceScrollToBottom();
+        }, 100);
+        
+        return result;
+    };
+}
+
+// Export functions for use in other parts of the app
+window.scrollToBottom = scrollToBottom;
+window.forceScrollToBottom = forceScrollToBottom;
+window.autoScrollIfAtBottom = autoScrollIfAtBottom;
+window.updateScrollButton = updateScrollButton;
+
+console.log('✅ Scroll-to-bottom button initialized');

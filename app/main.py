@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from app.api.routes import health_router, research_router, documents_router, auth_router
+from app.api.routes import health_router, research_router, documents_router, auth_router, reports_router
 from app.core import logger, settings
 import os
 
@@ -51,6 +51,7 @@ app.add_middleware(ObservabilityMiddleware)
 
 from app.api.routes.cache import router as cache_router
 from app.api.routes.memory import router as memory_router
+from app.api.routes.debug_db import router as debug_db_router
 
 # Include routers
 app.include_router(health_router, tags=["health"])
@@ -60,6 +61,8 @@ app.include_router(memory_router, tags=["memory"])
 app.include_router(auth_router, tags=["auth"])
 app.include_router(research_router, tags=["research"])
 app.include_router(documents_router, tags=["documents"])
+app.include_router(reports_router, tags=["reports"])
+app.include_router(debug_db_router, tags=["debug"])
 
 from pathlib import Path
 from fastapi.responses import FileResponse
@@ -106,8 +109,22 @@ async def startup_event():
     logger.info(f"Environment: {settings.APP_ENV}")
     logger.info(f"LLM Provider: {settings.LLM_PROVIDER}")
     
-    # Database disabled - using localStorage only
-    logger.info("Database: Disabled (using localStorage)")
+    # Initialize LangSmith observability
+    from app.core.langsmith_config import initialize_langsmith
+    initialize_langsmith()
+    
+    # Database initialization
+    from app.database.session import engine, Base
+    from app.database import models
+    
+    try:
+        # Test database connection
+        with engine.connect() as conn:
+            db_type = "PostgreSQL" if "postgresql" in str(engine.url) else "SQLite"
+            logger.info(f"Database: {db_type} connected successfully")
+            logger.info(f"Database URL: {engine.url.database}")
+    except Exception as e:
+        logger.warning(f"Database connection test failed: {e}")
     
     logger.info("Irium MVP started successfully")
 

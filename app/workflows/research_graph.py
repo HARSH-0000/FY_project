@@ -2,6 +2,7 @@ from typing import TypedDict, List, Dict, Annotated
 import time
 import asyncio
 from langgraph.graph import StateGraph, END
+from langchain_core.tracers.context import tracing_v2_enabled
 from app.agents.router import router_agent
 from app.agents.simple import simple_agent
 from app.agents.verification import verification_agent
@@ -13,13 +14,21 @@ from app.agents.critic import critic_agent
 from app.services.search import search_service
 from app.core import logger, settings
 from app.core.observability import trace_span, metrics
+from app.core.langsmith_config import get_langsmith_url
 
 
-class ResearchState(TypedDict):
+class ResearchState(TypedDict, total=False):
     """State for research workflow."""
-    query: str
+    query: str  # Resolved query used by agents for planning, search, and answering
+    original_query: str  # Preserved original user wording
+    resolved_query: str  # Contextually resolved query
     route: str
     route_reason: str
+    
+    # Multi-turn conversation context
+    conversation_id: str
+    conversation_history: List[Dict]
+    conversation_facts: Dict  # Extracted facts from conversation
     
     # For complex research
     tasks: List[Dict]
@@ -40,6 +49,7 @@ class ResearchState(TypedDict):
     retry_count: int
     
     # Final result
+    visualizations: List[Dict]
     result: Dict
     error: str
 
@@ -50,7 +60,11 @@ async def route_node(state: ResearchState) -> ResearchState:
     try:
         logger.info("=== ROUTE NODE ===")
         with trace_span("agent:router") as span:
-            decision = await router_agent.route(state["query"])
+            decision = await router_agent.route(
+                state["query"],
+                conversation_history=state.get("conversation_history", []),
+                conversation_facts=state.get("conversation_facts", {})
+            )
         
         duration_ms = (time.time() - start_time) * 1000
         metrics.record_agent_execution("router", duration_ms, status="success")
@@ -74,7 +88,10 @@ async def simple_node(state: ResearchState) -> ResearchState:
     try:
         logger.info("=== SIMPLE NODE ===")
         with trace_span("agent:simple") as span:
-            result = await simple_agent.answer(state["query"])
+            result = await simple_agent.answer(
+                state["query"],
+                conversation_facts=state.get("conversation_facts", {})
+            )
             
         duration_ms = (time.time() - start_time) * 1000
         metrics.record_agent_execution("simple", duration_ms, status="success")
@@ -331,6 +348,35 @@ async def finalize_node(state: ResearchState) -> ResearchState:
         return state
 
 
+async def visualize_node(state: ResearchState) -> ResearchState:
+    """Evaluate whether chart visualization is required and build chart specs."""
+    try:
+        logger.info("=== VISUALIZE NODE ===")
+        from app.services.visualization import should_generate_chart, build_visualization
+        query = state.get("query", "")
+        result = state.get("result", {})
+        
+        if should_generate_chart(query):
+            answer = result.get("answer", state.get("final_answer", ""))
+            sources = result.get("sources", state.get("sources", []))
+            evidence = result.get("evidence", state.get("evidence", []))
+            visualizations = build_visualization(query, answer, sources, evidence)
+        else:
+            visualizations = []
+            
+        state["visualizations"] = visualizations
+        if "result" in state and isinstance(state["result"], dict):
+            state["result"]["visualizations"] = visualizations
+            
+        return state
+    except Exception as e:
+        logger.error(f"Visualize node error: {e}")
+        state["visualizations"] = []
+        if "result" in state and isinstance(state["result"], dict):
+            state["result"]["visualizations"] = []
+        return state
+
+
 def should_retry(state: ResearchState) -> str:
     """Determine if we should retry based on critique and budget."""
     from app.core.budget import get_current_budget
@@ -389,6 +435,7 @@ def build_research_graph():
     workflow.add_node("write", write_node)
     workflow.add_node("critic", critique_node)
     workflow.add_node("finalize", finalize_node)
+    workflow.add_node("visualize", visualize_node)
     
     # Set entry point
     workflow.set_entry_point("router")
@@ -405,10 +452,10 @@ def build_research_graph():
     )
     
     # Simple path
-    workflow.add_edge("simple", END)
+    workflow.add_edge("simple", "visualize")
     
     # Verification path
-    workflow.add_edge("verification", END)
+    workflow.add_edge("verification", "visualize")
     
     # Complex path
     workflow.add_edge("plan", "search")
@@ -426,7 +473,8 @@ def build_research_graph():
         }
     )
     
-    workflow.add_edge("finalize", END)
+    workflow.add_edge("finalize", "visualize")
+    workflow.add_edge("visualize", END)
     
     return workflow.compile()
 

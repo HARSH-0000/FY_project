@@ -69,6 +69,28 @@ class ResearchJob(Base):
     evidence = relationship("Evidence", back_populates="research_job", cascade="all, delete-orphan")
 
 
+class AnonymousChat(Base):
+    """Anonymous chat table for storing individual chats without authentication."""
+    __tablename__ = "anonymous_chats"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    chat_id = Column(String(100), unique=True, nullable=False, index=True)  # Unique chat identifier
+    query = Column(Text, nullable=False)
+    route = Column(String(50), nullable=False)  # SIMPLE, VERIFICATION, COMPLEX
+    answer = Column(JSON, nullable=False)  # Structured answer with sections
+    evidence = Column(JSON, nullable=True)  # Evidence items
+    sources = Column(JSON, nullable=True)  # Source citations
+    trace_id = Column(String(100), nullable=True, index=True)  # For debugging
+    duration_ms = Column(Float, nullable=True)  # Response time
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    ip_address = Column(String(45), nullable=True)  # Optional IP tracking
+    user_agent = Column(String(500), nullable=True)  # Optional browser info
+    
+    # Metadata
+    pii_detected = Column(Boolean, default=False)
+    cached = Column(Boolean, default=False)
+
+
 class Evidence(Base):
     """Evidence table for research results."""
     __tablename__ = "evidence"

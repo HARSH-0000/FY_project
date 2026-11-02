@@ -1,7 +1,9 @@
 import time
 from app.workflows.research_graph import research_graph, ResearchState
-from app.core import logger
-from typing import Dict, Optional
+from app.core import logger, settings
+from app.core.langsmith_config import get_langsmith_url
+from langchain_core.tracers.context import tracing_v2_enabled
+from typing import Dict, Optional, List
 
 
 class ResearchService:
@@ -80,7 +82,11 @@ class ResearchService:
         query: str,
         bypass_cache: bool = False,
         user_id: Optional[int] = None,
-        session_id: Optional[int] = None
+        session_id: Optional[int] = None,
+        conversation_id: Optional[str] = None,
+        conversation_history: Optional[List[Dict]] = None,
+        original_query: Optional[str] = None,
+        resolved_query: Optional[str] = None
     ) -> Dict:
         """
         Execute research workflow for a query with caching and persistent memory.
@@ -90,6 +96,8 @@ class ResearchService:
             bypass_cache: Force fresh computation
             user_id: Optional user identifier
             session_id: Optional session identifier
+            conversation_id: Optional conversation identifier for multi-turn context
+            conversation_history: Optional list of previous conversation turns
         
         Returns:
             Research result dictionary
@@ -98,8 +106,70 @@ class ResearchService:
             from app.core.observability import trace_span, metrics, get_current_trace_id
             from app.services.cache import cache_service
             from app.services.memory import memory_service
+            from app.services.report_detector import report_detector
 
             logger.info(f"Starting research for query: {query}")
+            
+            # Check if this is a report generation request FIRST
+            try:
+                detection = await report_detector.detect(query)
+                if detection.is_report_request:
+                    logger.info(f"Report request detected: topic='{detection.topic}', format={detection.format}")
+                    
+                    try:
+                        # Generate report
+                        from app.services.report_content_generator import report_content_generator
+                        from app.services.pdf_generator import pdf_generator
+                        from app.services.docx_generator import docx_generator
+                        from app.services.pdf_page_counter import count_pdf_pages
+                        from pathlib import Path
+                        import uuid
+                        
+                        # Generate unique report ID
+                        report_id = uuid.uuid4().hex
+                        reports_dir = Path("data/reports")
+                        reports_dir.mkdir(parents=True, exist_ok=True)
+                        output_filename = f"report_{report_id}.{detection.format}"
+                        output_path = reports_dir / output_filename
+                        
+                        # Generate content
+                        content = await report_content_generator.generate(
+                            detection,
+                            session_id=session_id,
+                            uploaded_document_ids=None
+                        )
+                        
+                        # Render to PDF or DOCX
+                        if detection.format == "pdf":
+                            pdf_generator.generate(content, output_path)
+                            actual_pages = count_pdf_pages(output_path)
+                        else:  # docx
+                            docx_generator.generate(content, output_path)
+                            actual_pages = None
+                        
+                        # Return report response
+                        return {
+                            "type": "report",
+                            "report_id": report_id,
+                            "title": content.title,
+                            "format": detection.format,
+                            "filename": output_filename,
+                            "pages": actual_pages,
+                            "status": "completed",
+                            "download_url": f"/api/reports/{report_id}/download",
+                            "message": f"Report generated successfully! {actual_pages or '?'} pages." if actual_pages else "Report generated successfully!",
+                            "route": "REPORT",
+                            "evidence": [],
+                            "sources": []
+                        }
+                    except Exception as generation_error:
+                        logger.warning(f"Report generation failed, falling back to chat response: {generation_error}")
+                        # Fall through to normal research flow if generation fails
+                        # Continue below with normal chat response
+            except Exception as report_error:
+                logger.error(f"Report detection failed: {report_error}")
+                # Continue with normal research flow if report detection fails
+            
             cache_key = cache_service.build_key("research", query, user_id=user_id)
 
             # Update session context with any companies discussed in query
@@ -122,6 +192,16 @@ class ResearchService:
             memory_context = memory_service.build_memory_prompt_context(query, user_id=user_id, session_id=session_id)
             effective_query = f"{query}\n{memory_context}" if memory_context else query
 
+            # Extract facts from conversation history for multi-turn context
+            from app.services.fact_memory import fact_memory_service
+            conversation_facts = {}
+            if conversation_history:
+                conversation_facts = fact_memory_service.extract_facts_from_history(
+                    conversation_history, query
+                )
+                if conversation_facts:
+                    logger.info(f"Extracted {len(conversation_facts)} fact entities from conversation history")
+
             # Initialize request budget and trace context
             from app.core.budget import start_request_budget
             budget = start_request_budget(
@@ -131,8 +211,16 @@ class ResearchService:
             # Initialize state
             initial_state: ResearchState = {
                 "query": effective_query,
+                "original_query": original_query or query,
+                "resolved_query": resolved_query or query,
                 "route": "",
                 "route_reason": "",
+                
+                # Multi-turn conversation context
+                "conversation_id": conversation_id or "default",
+                "conversation_history": conversation_history or [],
+                "conversation_facts": conversation_facts,  # Extracted facts from history
+                
                 "tasks": [],
                 "completed_tasks": [],
                 "all_findings": [],
@@ -143,6 +231,7 @@ class ResearchService:
                 "sources": [],
                 "critique": {},
                 "retry_count": 0,
+                "visualizations": [],
                 "result": {},
                 "error": ""
             }
@@ -173,6 +262,8 @@ class ResearchService:
                     "answer": f"Research failed: {final_state['error']}",
                     "evidence": [],
                     "sources": [],
+                    "visualizations": [],
+                    "table": None,
                     "route": final_state.get("route", "UNKNOWN"),
                     "error": final_state["error"],
                     "trace_id": get_current_trace_id(),
@@ -181,6 +272,20 @@ class ResearchService:
             
             # Return result
             result = final_state.get("result", {})
+            result["original_query"] = original_query or query
+            result["resolved_query"] = resolved_query or query
+            if "visualizations" not in result:
+                result["visualizations"] = final_state.get("visualizations", [])
+            
+            # Extract table section for schema compatibility
+            table_val = None
+            answer_obj = result.get("answer")
+            if isinstance(answer_obj, dict):
+                for sec in answer_obj.get("sections", []):
+                    if isinstance(sec, dict) and sec.get("type") == "table":
+                        table_val = sec
+                        break
+            result["table"] = table_val
             result["trace_id"] = get_current_trace_id()
             result["duration_ms"] = round(duration_ms, 2)
             

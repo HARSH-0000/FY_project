@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Irium - AI Financial Multi Agent Research Assistant</title>
     <link rel="stylesheet" href="./style.css?v=3.0">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
     <style>
         .sidebar {
             height: 100vh !important;
@@ -229,6 +230,13 @@
 
                 <!-- Chat Messages -->
                 <div class="messages-container" id="messagesContainer"></div>
+                
+                <!-- Floating Scroll-to-Bottom Button -->
+                <button class="scroll-to-bottom-btn" id="scrollToBottomBtn" aria-label="Scroll to bottom">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M12 5v14M19 12l-7 7-7-7" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
             </div>
 
             <!-- Input Area -->
@@ -330,6 +338,8 @@
 
     <script src="./marked.min.js"></script>
     <script src="./purify.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+    <script src="./chartRenderer.js"></script>
     <script src="./app.js"></script>
 </body>
 

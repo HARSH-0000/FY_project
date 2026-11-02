@@ -28,7 +28,7 @@ class EvidenceAgent:
                     "source_url": finding.get("source_url", ""),
                     "source_name": finding.get("source_name", ""),
                     "evidence_text": finding.get("context", finding.get("information", "")),
-                    "confidence": finding.get("confidence", 0.7)
+                    "confidence": finding.get("confidence", 0.6)
                 }
                 
                 evidence.append(evidence_item)

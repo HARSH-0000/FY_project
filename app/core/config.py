@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     TAVILY_API_KEY: str = ""
     
     # Database
-    DATABASE_URL: str = "postgresql://irium:irium_password@localhost:5432/irium_db"
+    DATABASE_URL: str = "postgresql://postgres:root1234@localhost:5433/irium_db"
     
     # Application
     APP_ENV: Literal["development", "production"] = "development"
@@ -57,8 +57,14 @@ class Settings(BaseSettings):
 
     # Groq Model Assignments
     GROQ_MODEL_COMPLEX: str = "openai/gpt-oss-120b"
-    GROQ_MODEL_STANDARD: str = "openai/gpt-oss-20b"
-    GROQ_MODEL_ALTERNATIVE: str = "qwen/qwen3.8-27b"
+    GROQ_MODEL_STANDARD: str = "openai/gpt-oss-120b"  # Changed from gpt-oss-20b to gpt-oss-120b
+    GROQ_MODEL_ALTERNATIVE: str = "openai/gpt-oss-120b"  # Changed from qwen/qwen3.8-27b to gpt-oss-120b
+    
+    # LangSmith Observability
+    LANGCHAIN_TRACING_V2: bool = False
+    LANGCHAIN_ENDPOINT: str = "https://api.smith.langchain.com"
+    LANGCHAIN_API_KEY: str = ""
+    LANGCHAIN_PROJECT: str = "irium-research"
     
     class Config:
         env_file = ".env"
@@ -66,3 +72,4 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+ 
